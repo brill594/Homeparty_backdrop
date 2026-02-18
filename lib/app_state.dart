@@ -1,0 +1,353 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+enum MediaType { image, video }
+
+enum ResetToDefaultResult { switched, alreadyUsingDefault, defaultNotSet }
+
+enum StartPlaybackResult { played, queueEmpty }
+
+enum PlaybackTriggerKey { f6, f7, f8, f9, f10 }
+
+extension PlaybackTriggerKeyX on PlaybackTriggerKey {
+  String get label {
+    switch (this) {
+      case PlaybackTriggerKey.f6:
+        return 'F6';
+      case PlaybackTriggerKey.f7:
+        return 'F7';
+      case PlaybackTriggerKey.f8:
+        return 'F8';
+      case PlaybackTriggerKey.f9:
+        return 'F9';
+      case PlaybackTriggerKey.f10:
+        return 'F10';
+    }
+  }
+
+  PhysicalKeyboardKey get physicalKey {
+    switch (this) {
+      case PlaybackTriggerKey.f6:
+        return PhysicalKeyboardKey.f6;
+      case PlaybackTriggerKey.f7:
+        return PhysicalKeyboardKey.f7;
+      case PlaybackTriggerKey.f8:
+        return PhysicalKeyboardKey.f8;
+      case PlaybackTriggerKey.f9:
+        return PhysicalKeyboardKey.f9;
+      case PlaybackTriggerKey.f10:
+        return PhysicalKeyboardKey.f10;
+    }
+  }
+}
+
+@immutable
+class MediaItem {
+  const MediaItem({required this.type, required this.path, this.audioPath});
+
+  final MediaType type;
+  final String path;
+
+  // Optional. Only used when [type] is image.
+  final String? audioPath;
+
+  bool get hasAudioPath => audioPath != null && audioPath!.isNotEmpty;
+
+  bool get existsOnDisk => File(path).existsSync();
+
+  String get fileName => path.split(Platform.pathSeparator).last;
+
+  String get typeLabel => type == MediaType.image ? 'Image' : 'Video';
+
+  Map<String, dynamic> toJson() {
+    return <String, dynamic>{
+      'type': type.name,
+      'path': path,
+      'audioPath': audioPath,
+    };
+  }
+
+  static MediaItem? fromJson(dynamic raw) {
+    if (raw is! Map) {
+      return null;
+    }
+    final map = raw.map((key, value) => MapEntry(key.toString(), value));
+    final typeName = map['type']?.toString();
+    final path = map['path']?.toString();
+    if (typeName == null || path == null || path.isEmpty) {
+      return null;
+    }
+
+    MediaType? mediaType;
+    for (final value in MediaType.values) {
+      if (value.name == typeName) {
+        mediaType = value;
+        break;
+      }
+    }
+    if (mediaType == null) {
+      return null;
+    }
+
+    final rawAudioPath = map['audioPath']?.toString();
+    final audioPath = rawAudioPath == null || rawAudioPath.isEmpty
+        ? null
+        : rawAudioPath;
+    return MediaItem(type: mediaType, path: path, audioPath: audioPath);
+  }
+}
+
+class AppState extends ChangeNotifier {
+  static const List<String> imageExtensions = <String>[
+    'jpg',
+    'jpeg',
+    'png',
+    'webp',
+    'bmp',
+    'gif',
+    'heic',
+  ];
+
+  static const List<String> videoExtensions = <String>[
+    'mp4',
+    'mov',
+    'm4v',
+    'avi',
+    'mkv',
+    'webm',
+  ];
+
+  static const List<String> audioExtensions = <String>[
+    'mp3',
+    'aac',
+    'm4a',
+    'wav',
+    'flac',
+    'ogg',
+  ];
+
+  static const List<String> mediaPickerExtensions = <String>[
+    ...imageExtensions,
+    ...videoExtensions,
+  ];
+
+  static const String _kDefaultPath = 'default_media_path';
+  static const String _kDefaultType = 'default_media_type';
+  static const String _kDefaultAudioPath = 'default_media_audio_path';
+
+  SharedPreferences? _prefs;
+  MediaItem? _defaultBackground;
+  MediaItem? _stageOverride;
+
+  final List<MediaItem> _playQueue = <MediaItem>[];
+  int _nextPlayIndex = 0;
+  bool _playbackReady = false;
+  PlaybackTriggerKey _playbackTriggerKey = PlaybackTriggerKey.f8;
+  int _playSignalVersion = 0;
+
+  MediaItem? get defaultBackground => _defaultBackground;
+
+  MediaItem? get stageOverride => _stageOverride;
+
+  bool get isUsingStageOverride => _stageOverride != null;
+
+  MediaItem? get currentStageMedia => _stageOverride ?? _defaultBackground;
+
+  List<MediaItem> get playQueue => List<MediaItem>.unmodifiable(_playQueue);
+
+  bool get playbackReady => _playbackReady;
+
+  int get nextPlayIndex => _nextPlayIndex;
+
+  PlaybackTriggerKey get playbackTriggerKey => _playbackTriggerKey;
+
+  int get playSignalVersion => _playSignalVersion;
+
+  MediaItem? get nextQueueItem {
+    if (_playQueue.isEmpty) {
+      return null;
+    }
+    final safeIndex = _nextPlayIndex % _playQueue.length;
+    return _playQueue[safeIndex];
+  }
+
+  Future<void> initialize() async {
+    _prefs = await SharedPreferences.getInstance();
+    _readDefaultFromPrefs();
+    notifyListeners();
+  }
+
+  void setPlaybackTriggerKey(PlaybackTriggerKey key) {
+    if (_playbackTriggerKey == key) {
+      return;
+    }
+    _playbackTriggerKey = key;
+    notifyListeners();
+  }
+
+  MediaItem? createItemFromPath(String path, {String? audioPath}) {
+    final extension = _normalizedExtension(path);
+    if (imageExtensions.contains(extension)) {
+      return MediaItem(type: MediaType.image, path: path, audioPath: audioPath);
+    }
+    if (videoExtensions.contains(extension)) {
+      return MediaItem(type: MediaType.video, path: path);
+    }
+    return null;
+  }
+
+  Future<void> setDefaultBackground(MediaItem item) async {
+    _defaultBackground = item;
+    await _persistDefaultToPrefs(item);
+    notifyListeners();
+  }
+
+  Future<void> clearDefaultBackground() async {
+    _defaultBackground = null;
+    final prefs = await _ensurePrefs();
+    await prefs.remove(_kDefaultPath);
+    await prefs.remove(_kDefaultType);
+    await prefs.remove(_kDefaultAudioPath);
+    notifyListeners();
+  }
+
+  void addQueueItem(MediaItem item) {
+    _playQueue.removeWhere((oldItem) {
+      return oldItem.type == item.type &&
+          oldItem.path == item.path &&
+          oldItem.audioPath == item.audioPath;
+    });
+    _playQueue.add(item);
+    _normalizeNextIndex();
+    notifyListeners();
+  }
+
+  void reorderPlayQueue(int oldIndex, int newIndex) {
+    if (_playQueue.isEmpty || oldIndex < 0 || oldIndex >= _playQueue.length) {
+      return;
+    }
+    if (newIndex < 0) {
+      newIndex = 0;
+    }
+    if (newIndex > _playQueue.length) {
+      newIndex = _playQueue.length;
+    }
+    if (oldIndex < newIndex) {
+      newIndex -= 1;
+    }
+    if (newIndex == oldIndex) {
+      return;
+    }
+    final item = _playQueue.removeAt(oldIndex);
+    _playQueue.insert(newIndex, item);
+    _normalizeNextIndex();
+    notifyListeners();
+  }
+
+  void playOnStage(MediaItem item, {bool fromQueue = false}) {
+    _stageOverride = item;
+    _playSignalVersion++;
+    if (!fromQueue) {
+      addQueueItem(item);
+      return;
+    }
+    notifyListeners();
+  }
+
+  StartPlaybackResult startAndPlayNext() {
+    if (_playQueue.isEmpty) {
+      return StartPlaybackResult.queueEmpty;
+    }
+
+    _playbackReady = true;
+    _normalizeNextIndex();
+    final next = _playQueue[_nextPlayIndex];
+    _stageOverride = next;
+    _playSignalVersion++;
+    _nextPlayIndex = (_nextPlayIndex + 1) % _playQueue.length;
+    notifyListeners();
+    return StartPlaybackResult.played;
+  }
+
+  ResetToDefaultResult resetToDefaultBackground() {
+    if (_defaultBackground == null) {
+      return ResetToDefaultResult.defaultNotSet;
+    }
+    if (_stageOverride == null) {
+      return ResetToDefaultResult.alreadyUsingDefault;
+    }
+    _stageOverride = null;
+    notifyListeners();
+    return ResetToDefaultResult.switched;
+  }
+
+  Future<SharedPreferences> _ensurePrefs() async {
+    return _prefs ??= await SharedPreferences.getInstance();
+  }
+
+  Future<void> _persistDefaultToPrefs(MediaItem item) async {
+    final prefs = await _ensurePrefs();
+    await prefs.setString(_kDefaultPath, item.path);
+    await prefs.setString(_kDefaultType, item.type.name);
+    if (item.type == MediaType.image && item.hasAudioPath) {
+      await prefs.setString(_kDefaultAudioPath, item.audioPath!);
+    } else {
+      await prefs.remove(_kDefaultAudioPath);
+    }
+  }
+
+  void _readDefaultFromPrefs() {
+    final prefs = _prefs;
+    if (prefs == null) {
+      return;
+    }
+
+    final path = prefs.getString(_kDefaultPath);
+    final typeName = prefs.getString(_kDefaultType);
+    if (path == null || path.isEmpty || typeName == null) {
+      _defaultBackground = null;
+      return;
+    }
+
+    final mediaType = _mediaTypeFromName(typeName);
+    if (mediaType == null) {
+      _defaultBackground = null;
+      return;
+    }
+
+    final audioPath = prefs.getString(_kDefaultAudioPath);
+    _defaultBackground = MediaItem(
+      type: mediaType,
+      path: path,
+      audioPath: mediaType == MediaType.image ? audioPath : null,
+    );
+  }
+
+  void _normalizeNextIndex() {
+    if (_playQueue.isEmpty) {
+      _nextPlayIndex = 0;
+      return;
+    }
+    _nextPlayIndex = _nextPlayIndex % _playQueue.length;
+  }
+
+  String _normalizedExtension(String path) {
+    final parts = path.split('.');
+    if (parts.length < 2) {
+      return '';
+    }
+    return parts.last.toLowerCase();
+  }
+
+  MediaType? _mediaTypeFromName(String typeName) {
+    for (final type in MediaType.values) {
+      if (type.name == typeName) {
+        return type;
+      }
+    }
+    return null;
+  }
+}

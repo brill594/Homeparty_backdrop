@@ -244,6 +244,26 @@ class ControlPageState extends State<ControlPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  void _updatePlaybackTriggerKey(LetterTriggerKey? value) {
+    if (value == null) {
+      return;
+    }
+    final updated = widget.appState.setPlaybackTriggerKey(value);
+    if (!updated) {
+      _showSnackBar('播放触发键不能与“切回默认”按键重复。');
+    }
+  }
+
+  void _updateResetTriggerKey(LetterTriggerKey? value) {
+    if (value == null) {
+      return;
+    }
+    final updated = widget.appState.setResetTriggerKey(value);
+    if (!updated) {
+      _showSnackBar('“切回默认”按键不能与播放触发键重复。');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -254,14 +274,19 @@ class ControlPageState extends State<ControlPage> {
         final queue = widget.appState.playQueue;
         final nextItem = widget.appState.nextQueueItem;
         final readyText = widget.appState.playbackReady ? '准备播放' : '未开始';
-        final triggerKey = widget.appState.playbackTriggerKey;
+        final playbackKey = widget.appState.playbackTriggerKey;
+        final resetKey = widget.appState.resetTriggerKey;
         return Scaffold(
           appBar: AppBar(
             title: const Text('ControlPage'),
-            actions: const <Widget>[
+            actions: <Widget>[
               Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12),
-                child: Center(child: Text('全局热键：Cmd + Shift + B（切回默认）')),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Center(
+                  child: Text(
+                    '快捷键：播放下一项(${playbackKey.label}) / 切回默认(${resetKey.label})',
+                  ),
+                ),
               ),
             ],
           ),
@@ -279,7 +304,8 @@ class ControlPageState extends State<ControlPage> {
                 const SizedBox(height: 10),
                 _PlaybackStatusCard(
                   statusText: readyText,
-                  triggerKeyLabel: triggerKey.label,
+                  playbackKeyLabel: playbackKey.label,
+                  resetKeyLabel: resetKey.label,
                   nextItem: nextItem,
                 ),
                 const SizedBox(height: 16),
@@ -326,24 +352,43 @@ class ControlPageState extends State<ControlPage> {
                   ],
                 ),
                 const SizedBox(height: 12),
-                Row(
+                Wrap(
+                  spacing: 24,
+                  runSpacing: 8,
                   children: <Widget>[
-                    const Text('播放触发按键：'),
-                    const SizedBox(width: 12),
-                    DropdownButton<PlaybackTriggerKey>(
-                      value: triggerKey,
-                      onChanged: (value) {
-                        if (value == null) {
-                          return;
-                        }
-                        widget.appState.setPlaybackTriggerKey(value);
-                      },
-                      items: PlaybackTriggerKey.values.map((key) {
-                        return DropdownMenuItem<PlaybackTriggerKey>(
-                          value: key,
-                          child: Text(key.label),
-                        );
-                      }).toList(),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        const Text('播放触发按键：'),
+                        const SizedBox(width: 12),
+                        DropdownButton<LetterTriggerKey>(
+                          value: playbackKey,
+                          onChanged: _updatePlaybackTriggerKey,
+                          items: LetterTriggerKey.values.map((key) {
+                            return DropdownMenuItem<LetterTriggerKey>(
+                              value: key,
+                              child: Text(key.label),
+                            );
+                          }).toList(),
+                        ),
+                      ],
+                    ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        const Text('切回默认按键：'),
+                        const SizedBox(width: 12),
+                        DropdownButton<LetterTriggerKey>(
+                          value: resetKey,
+                          onChanged: _updateResetTriggerKey,
+                          items: LetterTriggerKey.values.map((key) {
+                            return DropdownMenuItem<LetterTriggerKey>(
+                              value: key,
+                              child: Text(key.label),
+                            );
+                          }).toList(),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -424,12 +469,14 @@ class _DefaultStatusCard extends StatelessWidget {
 class _PlaybackStatusCard extends StatelessWidget {
   const _PlaybackStatusCard({
     required this.statusText,
-    required this.triggerKeyLabel,
+    required this.playbackKeyLabel,
+    required this.resetKeyLabel,
     required this.nextItem,
   });
 
   final String statusText;
-  final String triggerKeyLabel;
+  final String playbackKeyLabel;
+  final String resetKeyLabel;
   final MediaItem? nextItem;
 
   @override
@@ -453,7 +500,9 @@ class _PlaybackStatusCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text('下一项：$nextText'),
             const SizedBox(height: 4),
-            Text('触发键：$triggerKeyLabel'),
+            Text('播放触发键：$playbackKeyLabel'),
+            const SizedBox(height: 2),
+            Text('切回默认键：$resetKeyLabel'),
           ],
         ),
       ),

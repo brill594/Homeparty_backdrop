@@ -20,6 +20,8 @@ class StagePage extends StatefulWidget {
 }
 
 class _StagePageState extends State<StagePage> {
+  static const Duration _overlayAutoHideDelay = Duration(seconds: 3);
+
   final AudioPlayer _audioPlayer = AudioPlayer();
   final FocusNode _keyboardFocusNode = FocusNode(debugLabel: 'stage_keyboard');
 
@@ -33,6 +35,8 @@ class _StagePageState extends State<StagePage> {
   bool _isVideoLooping = true;
   String? _playbackNotice;
   int _syncToken = 0;
+  Timer? _overlayHideTimer;
+  bool _overlayVisible = true;
 
   @override
   void initState() {
@@ -46,6 +50,7 @@ class _StagePageState extends State<StagePage> {
         _keyboardFocusNode.requestFocus();
       }
     });
+    _restartOverlayAutoHideTimer();
     _onAppStateChanged();
   }
 
@@ -61,6 +66,7 @@ class _StagePageState extends State<StagePage> {
 
     _audioPlayer.dispose();
     _keyboardFocusNode.dispose();
+    _overlayHideTimer?.cancel();
     unawaited(WakelockPlus.disable());
     super.dispose();
   }
@@ -71,6 +77,7 @@ class _StagePageState extends State<StagePage> {
   }
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
+    _onUserInteraction();
     if (event is! KeyDownEvent) {
       return KeyEventResult.ignored;
     }
@@ -116,6 +123,7 @@ class _StagePageState extends State<StagePage> {
     _activeMedia = nextMedia;
     _activeUsingOverride = nextUsingOverride;
     _activePlaySignal = nextPlaySignal;
+    _onUserInteraction();
 
     final token = ++_syncToken;
     unawaited(_switchPlaybackForMedia(nextMedia, token));
@@ -242,12 +250,43 @@ class _StagePageState extends State<StagePage> {
   }
 
   void _switchToDefaultBackground() {
+    _onUserInteraction();
     final result = widget.appState.resetToDefaultBackground();
     if (result == ResetToDefaultResult.defaultNotSet) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('请先设置默认背景。')));
     }
+  }
+
+  void _onUserInteraction() {
+    _restartOverlayAutoHideTimer();
+    if (_overlayVisible || !mounted) {
+      return;
+    }
+    setState(() {
+      _overlayVisible = true;
+    });
+  }
+
+  void _restartOverlayAutoHideTimer() {
+    _overlayHideTimer?.cancel();
+    _overlayHideTimer = Timer(_overlayAutoHideDelay, () {
+      if (!mounted || !_overlayVisible) {
+        return;
+      }
+      setState(() {
+        _overlayVisible = false;
+      });
+    });
+  }
+
+  Widget _buildAutoHideOverlay(Widget child) {
+    return AnimatedOpacity(
+      opacity: _overlayVisible ? 1 : 0,
+      duration: const Duration(milliseconds: 200),
+      child: IgnorePointer(ignoring: !_overlayVisible, child: child),
+    );
   }
 
   @override
@@ -259,9 +298,13 @@ class _StagePageState extends State<StagePage> {
       autofocus: true,
       onKeyEvent: _onKeyEvent,
       child: MouseRegion(
+        onEnter: (_) => _onUserInteraction(),
+        onHover: (_) => _onUserInteraction(),
         cursor: SystemMouseCursors.none,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
+          onTapDown: (_) => _onUserInteraction(),
+          onPanDown: (_) => _onUserInteraction(),
           onTap: _keyboardFocusNode.requestFocus,
           child: Scaffold(
             backgroundColor: Colors.black,
@@ -271,42 +314,46 @@ class _StagePageState extends State<StagePage> {
                 Positioned(
                   top: 20,
                   left: 20,
-                  child: Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: <Widget>[
-                      FilledButton.tonal(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('返回控制台'),
-                      ),
-                      FilledButton.tonal(
-                        onPressed: () => _setFullscreen(!_isFullscreen),
-                        child: Text(_isFullscreen ? '退出全屏(Esc)' : '进入全屏(F11)'),
-                      ),
-                      FilledButton.tonal(
-                        onPressed: _switchToDefaultBackground,
-                        child: const Text('切回默认背景'),
-                      ),
-                      if (isVideo) ...<Widget>[
+                  child: _buildAutoHideOverlay(
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: <Widget>[
                         FilledButton.tonal(
-                          onPressed: _toggleVideoPauseResume,
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('返回控制台'),
+                        ),
+                        FilledButton.tonal(
+                          onPressed: () => _setFullscreen(!_isFullscreen),
                           child: Text(
-                            _isVideoPlaying ? '暂停(Space)' : '继续(Space)',
+                            _isFullscreen ? '退出全屏(Esc)' : '进入全屏(F11)',
                           ),
                         ),
                         FilledButton.tonal(
-                          onPressed: _toggleVideoLooping,
-                          child: Text(_isVideoLooping ? '循环: 开' : '循环: 关'),
+                          onPressed: _switchToDefaultBackground,
+                          child: const Text('切回默认背景'),
                         ),
+                        if (isVideo) ...<Widget>[
+                          FilledButton.tonal(
+                            onPressed: _toggleVideoPauseResume,
+                            child: Text(
+                              _isVideoPlaying ? '暂停(Space)' : '继续(Space)',
+                            ),
+                          ),
+                          FilledButton.tonal(
+                            onPressed: _toggleVideoLooping,
+                            child: Text(_isVideoLooping ? '循环: 开' : '循环: 关'),
+                          ),
+                        ],
                       ],
-                    ],
+                    ),
                   ),
                 ),
                 Positioned(
                   left: 20,
                   right: 20,
                   bottom: 20,
-                  child: _buildMediaInfo(media),
+                  child: _buildAutoHideOverlay(_buildMediaInfo(media)),
                 ),
               ],
             ),
@@ -374,6 +421,8 @@ class _StagePageState extends State<StagePage> {
               ? 'Type: image | Audio: ${media.audioPath}'
               : 'Type: image | Audio: mute'
         : 'Type: video | Loop: ${_isVideoLooping ? 'on' : 'off'} | Space: pause/resume';
+    final keyTips =
+        'Hotkeys: Next(${widget.appState.playbackTriggerKey.label}) | Default(${widget.appState.resetTriggerKey.label})';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -417,6 +466,8 @@ class _StagePageState extends State<StagePage> {
                 ),
                 const SizedBox(height: 4),
                 Text(subtitle, style: const TextStyle(color: Colors.white70)),
+                const SizedBox(height: 2),
+                Text(keyTips, style: const TextStyle(color: Colors.white60)),
               ],
             ),
           ),

@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
@@ -60,116 +59,70 @@ class HomepartyApp extends StatefulWidget {
 class _HomepartyAppState extends State<HomepartyApp> {
   final GlobalKey<ControlPageState> _controlPageKey =
       GlobalKey<ControlPageState>();
-  static const List<HotKeyModifier> _resetModifiers = <HotKeyModifier>[
-    HotKeyModifier.meta,
-    HotKeyModifier.shift,
-  ];
-  static const List<HotKeyModifier> _playNextModifiers = <HotKeyModifier>[
-    HotKeyModifier.meta,
-  ];
-
-  PlaybackTriggerKey? _registeredPlaybackTriggerKey;
-  int _hotkeyRegisterToken = 0;
   bool _windowReady = false;
 
   @override
   void initState() {
     super.initState();
-    widget.appState.addListener(_onAppStateChanged);
-    unawaited(_registerHotKeysAfterWindowReady());
+    HardwareKeyboard.instance.addHandler(_onHardwareKeyEvent);
+    unawaited(_waitForMainWindowReady());
   }
 
   @override
   void dispose() {
-    widget.appState.removeListener(_onAppStateChanged);
-    _hotkeyRegisterToken++;
-    unawaited(_unregisterAllHotKeysSafely());
+    HardwareKeyboard.instance.removeHandler(_onHardwareKeyEvent);
     super.dispose();
   }
 
-  void _onAppStateChanged() {
-    if (!_windowReady) {
-      return;
-    }
-    if (_registeredPlaybackTriggerKey != widget.appState.playbackTriggerKey) {
-      unawaited(_registerAllHotKeysSafely());
-    }
-  }
-
-  Future<void> _registerHotKeysAfterWindowReady() async {
+  Future<void> _waitForMainWindowReady() async {
     await widget.windowReady;
     if (!mounted) {
       return;
     }
     _windowReady = true;
-    await _registerAllHotKeysSafely();
   }
 
-  Future<void> _registerAllHotKeysSafely() async {
-    final token = ++_hotkeyRegisterToken;
-    final desiredKey = widget.appState.playbackTriggerKey;
-
-    final resetStageHotKey = HotKey(
-      key: PhysicalKeyboardKey.keyB,
-      modifiers: _resetModifiers,
-      scope: HotKeyScope.system,
-    );
-    final playNextHotKey = HotKey(
-      key: desiredKey.physicalKey,
-      modifiers: _playNextModifiers,
-      scope: HotKeyScope.system,
-    );
-
-    try {
-      await hotKeyManager.unregisterAll();
-      if (!mounted || token != _hotkeyRegisterToken) {
-        return;
-      }
-
-      await hotKeyManager.register(
-        resetStageHotKey,
-        keyDownHandler: (_) {
-          final result = widget.appState.resetToDefaultBackground();
-          if (result == ResetToDefaultResult.defaultNotSet) {
-            _controlPageKey.currentState?.showLightweightTip(
-              'Default background is not set yet.',
-            );
-          }
-        },
-      );
-      if (!mounted || token != _hotkeyRegisterToken) {
-        return;
-      }
-
-      await hotKeyManager.register(
-        playNextHotKey,
-        keyDownHandler: (_) {
-          final result = widget.appState.startAndPlayNext();
-          if (result == StartPlaybackResult.queueEmpty) {
-            _controlPageKey.currentState?.showLightweightTip('播放列表为空，请先添加节目。');
-          }
-        },
-      );
-      if (!mounted || token != _hotkeyRegisterToken) {
-        return;
-      }
-
-      _registeredPlaybackTriggerKey = desiredKey;
-    } catch (e, stack) {
-      debugPrint('Hotkey register error: $e');
-      debugPrint('$stack');
+  bool _onHardwareKeyEvent(KeyEvent event) {
+    if (!_windowReady) {
+      return false;
     }
+    if (event is KeyRepeatEvent || event is! KeyDownEvent) {
+      return false;
+    }
+    if (_hasModifierKeyPressed()) {
+      return false;
+    }
+
+    final triggerKey = LetterTriggerKeyX.fromPhysicalKey(event.physicalKey);
+    if (triggerKey == null) {
+      return false;
+    }
+
+    if (triggerKey == widget.appState.resetTriggerKey) {
+      final result = widget.appState.resetToDefaultBackground();
+      if (result == ResetToDefaultResult.defaultNotSet) {
+        _controlPageKey.currentState?.showLightweightTip('请先设置默认背景。');
+      }
+      return true;
+    }
+
+    if (triggerKey == widget.appState.playbackTriggerKey) {
+      final result = widget.appState.startAndPlayNext();
+      if (result == StartPlaybackResult.queueEmpty) {
+        _controlPageKey.currentState?.showLightweightTip('播放列表为空，请先添加节目。');
+      }
+      return true;
+    }
+
+    return false;
   }
 
-  Future<void> _unregisterAllHotKeysSafely() async {
-    try {
-      await hotKeyManager.unregisterAll();
-    } catch (e, stack) {
-      debugPrint('Hotkey unregister error: $e');
-      debugPrint('$stack');
-    } finally {
-      _registeredPlaybackTriggerKey = null;
-    }
+  bool _hasModifierKeyPressed() {
+    final keyboard = HardwareKeyboard.instance;
+    return keyboard.isMetaPressed ||
+        keyboard.isControlPressed ||
+        keyboard.isAltPressed ||
+        keyboard.isShiftPressed;
   }
 
   @override

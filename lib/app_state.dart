@@ -10,37 +10,79 @@ enum ResetToDefaultResult { switched, alreadyUsingDefault, defaultNotSet }
 
 enum StartPlaybackResult { played, queueEmpty }
 
-enum PlaybackTriggerKey { f6, f7, f8, f9, f10 }
+enum LetterTriggerKey {
+  a,
+  b,
+  c,
+  d,
+  e,
+  f,
+  g,
+  h,
+  i,
+  j,
+  k,
+  l,
+  m,
+  n,
+  o,
+  p,
+  q,
+  r,
+  s,
+  t,
+  u,
+  v,
+  w,
+  x,
+  y,
+  z,
+}
 
-extension PlaybackTriggerKeyX on PlaybackTriggerKey {
+const List<PhysicalKeyboardKey> _letterPhysicalKeys = <PhysicalKeyboardKey>[
+  PhysicalKeyboardKey.keyA,
+  PhysicalKeyboardKey.keyB,
+  PhysicalKeyboardKey.keyC,
+  PhysicalKeyboardKey.keyD,
+  PhysicalKeyboardKey.keyE,
+  PhysicalKeyboardKey.keyF,
+  PhysicalKeyboardKey.keyG,
+  PhysicalKeyboardKey.keyH,
+  PhysicalKeyboardKey.keyI,
+  PhysicalKeyboardKey.keyJ,
+  PhysicalKeyboardKey.keyK,
+  PhysicalKeyboardKey.keyL,
+  PhysicalKeyboardKey.keyM,
+  PhysicalKeyboardKey.keyN,
+  PhysicalKeyboardKey.keyO,
+  PhysicalKeyboardKey.keyP,
+  PhysicalKeyboardKey.keyQ,
+  PhysicalKeyboardKey.keyR,
+  PhysicalKeyboardKey.keyS,
+  PhysicalKeyboardKey.keyT,
+  PhysicalKeyboardKey.keyU,
+  PhysicalKeyboardKey.keyV,
+  PhysicalKeyboardKey.keyW,
+  PhysicalKeyboardKey.keyX,
+  PhysicalKeyboardKey.keyY,
+  PhysicalKeyboardKey.keyZ,
+];
+
+extension LetterTriggerKeyX on LetterTriggerKey {
   String get label {
-    switch (this) {
-      case PlaybackTriggerKey.f6:
-        return 'F6';
-      case PlaybackTriggerKey.f7:
-        return 'F7';
-      case PlaybackTriggerKey.f8:
-        return 'F8';
-      case PlaybackTriggerKey.f9:
-        return 'F9';
-      case PlaybackTriggerKey.f10:
-        return 'F10';
-    }
+    return name.toUpperCase();
   }
 
   PhysicalKeyboardKey get physicalKey {
-    switch (this) {
-      case PlaybackTriggerKey.f6:
-        return PhysicalKeyboardKey.f6;
-      case PlaybackTriggerKey.f7:
-        return PhysicalKeyboardKey.f7;
-      case PlaybackTriggerKey.f8:
-        return PhysicalKeyboardKey.f8;
-      case PlaybackTriggerKey.f9:
-        return PhysicalKeyboardKey.f9;
-      case PlaybackTriggerKey.f10:
-        return PhysicalKeyboardKey.f10;
+    return _letterPhysicalKeys[index];
+  }
+
+  static LetterTriggerKey? fromPhysicalKey(PhysicalKeyboardKey key) {
+    final index = _letterPhysicalKeys.indexOf(key);
+    if (index < 0) {
+      return null;
     }
+    return LetterTriggerKey.values[index];
   }
 }
 
@@ -145,7 +187,8 @@ class AppState extends ChangeNotifier {
   final List<MediaItem> _playQueue = <MediaItem>[];
   int _nextPlayIndex = 0;
   bool _playbackReady = false;
-  PlaybackTriggerKey _playbackTriggerKey = PlaybackTriggerKey.f8;
+  LetterTriggerKey _playbackTriggerKey = LetterTriggerKey.n;
+  LetterTriggerKey _resetTriggerKey = LetterTriggerKey.b;
   int _playSignalVersion = 0;
 
   MediaItem? get defaultBackground => _defaultBackground;
@@ -162,7 +205,9 @@ class AppState extends ChangeNotifier {
 
   int get nextPlayIndex => _nextPlayIndex;
 
-  PlaybackTriggerKey get playbackTriggerKey => _playbackTriggerKey;
+  LetterTriggerKey get playbackTriggerKey => _playbackTriggerKey;
+
+  LetterTriggerKey get resetTriggerKey => _resetTriggerKey;
 
   int get playSignalVersion => _playSignalVersion;
 
@@ -180,12 +225,28 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setPlaybackTriggerKey(PlaybackTriggerKey key) {
+  bool setPlaybackTriggerKey(LetterTriggerKey key) {
+    if (key == _resetTriggerKey) {
+      return false;
+    }
     if (_playbackTriggerKey == key) {
-      return;
+      return true;
     }
     _playbackTriggerKey = key;
     notifyListeners();
+    return true;
+  }
+
+  bool setResetTriggerKey(LetterTriggerKey key) {
+    if (key == _playbackTriggerKey) {
+      return false;
+    }
+    if (_resetTriggerKey == key) {
+      return true;
+    }
+    _resetTriggerKey = key;
+    notifyListeners();
+    return true;
   }
 
   MediaItem? createItemFromPath(String path, {String? audioPath}) {

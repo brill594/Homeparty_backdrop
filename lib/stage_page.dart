@@ -136,7 +136,11 @@ class _StagePageState extends State<StagePage> {
     if (a == null || b == null) {
       return false;
     }
-    return a.type == b.type && a.path == b.path && a.audioPath == b.audioPath;
+    return a.type == b.type &&
+        a.path == b.path &&
+        a.audioPath == b.audioPath &&
+        a.title == b.title &&
+        a.artist == b.artist;
   }
 
   Future<void> _switchPlaybackForMedia(MediaItem? media, int token) async {
@@ -411,18 +415,20 @@ class _StagePageState extends State<StagePage> {
   }
 
   Widget _buildMediaInfo(MediaItem? media) {
-    final title = media == null
-        ? 'Now showing: none'
-        : 'Now showing: ${media.fileName}';
-    final subtitle = media == null
-        ? 'Waiting for media from ControlPage.'
+    final currentTitle = media?.displayTitle ?? '无';
+    final currentArtist = media?.displayArtist ?? '未填写';
+    final nextItem = widget.appState.nextQueueItem;
+    final nextTitle = nextItem?.displayTitle ?? '无';
+    final nextArtist = nextItem?.displayArtist ?? '未填写';
+    final playbackMeta = media == null
+        ? '等待控制台发送节目。'
         : media.type == MediaType.image
         ? media.hasAudioPath
-              ? 'Type: image | Audio: ${media.audioPath}'
-              : 'Type: image | Audio: mute'
-        : 'Type: video | Loop: ${_isVideoLooping ? 'on' : 'off'} | Space: pause/resume';
+              ? '类型：图片 | 伴奏：${media.audioPath}'
+              : '类型：图片 | 伴奏：静音'
+        : '类型：视频 | 循环：${_isVideoLooping ? '开' : '关'} | Space：暂停/继续';
     final keyTips =
-        'Hotkeys: Next(${widget.appState.playbackTriggerKey.label}) | Default(${widget.appState.resetTriggerKey.label})';
+        '热键：下一项(${widget.appState.playbackTriggerKey.label}) | 切回默认(${widget.appState.resetTriggerKey.label})';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -458,14 +464,32 @@ class _StagePageState extends State<StagePage> {
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 Text(
-                  title,
+                  '当前节目：$currentTitle',
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 4),
-                Text(subtitle, style: const TextStyle(color: Colors.white70)),
+                Text(
+                  '当前演唱者：$currentArtist',
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '下一节目：$nextTitle',
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '下一演唱者：$nextArtist',
+                  style: const TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  playbackMeta,
+                  style: const TextStyle(color: Colors.white70),
+                ),
                 const SizedBox(height: 2),
                 Text(keyTips, style: const TextStyle(color: Colors.white60)),
               ],

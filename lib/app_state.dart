@@ -88,19 +88,45 @@ extension LetterTriggerKeyX on LetterTriggerKey {
 
 @immutable
 class MediaItem {
-  const MediaItem({required this.type, required this.path, this.audioPath});
+  const MediaItem({
+    required this.type,
+    required this.path,
+    this.audioPath,
+    this.title,
+    this.artist,
+  });
 
   final MediaType type;
   final String path;
 
   // Optional. Only used when [type] is image.
   final String? audioPath;
+  final String? title;
+  final String? artist;
 
   bool get hasAudioPath => audioPath != null && audioPath!.isNotEmpty;
+
+  bool get hasTitle => title != null && title!.trim().isNotEmpty;
+
+  bool get hasArtist => artist != null && artist!.trim().isNotEmpty;
 
   bool get existsOnDisk => File(path).existsSync();
 
   String get fileName => path.split(Platform.pathSeparator).last;
+
+  String get displayTitle {
+    if (hasTitle) {
+      return title!.trim();
+    }
+    return fileName;
+  }
+
+  String get displayArtist {
+    if (hasArtist) {
+      return artist!.trim();
+    }
+    return '未填写';
+  }
 
   String get typeLabel => type == MediaType.image ? 'Image' : 'Video';
 
@@ -109,6 +135,8 @@ class MediaItem {
       'type': type.name,
       'path': path,
       'audioPath': audioPath,
+      'title': title,
+      'artist': artist,
     };
   }
 
@@ -138,7 +166,15 @@ class MediaItem {
     final audioPath = rawAudioPath == null || rawAudioPath.isEmpty
         ? null
         : rawAudioPath;
-    return MediaItem(type: mediaType, path: path, audioPath: audioPath);
+    final rawTitle = map['title']?.toString();
+    final rawArtist = map['artist']?.toString();
+    return MediaItem(
+      type: mediaType,
+      path: path,
+      audioPath: audioPath,
+      title: rawTitle == null || rawTitle.trim().isEmpty ? null : rawTitle,
+      artist: rawArtist == null || rawArtist.trim().isEmpty ? null : rawArtist,
+    );
   }
 }
 
@@ -179,6 +215,7 @@ class AppState extends ChangeNotifier {
   static const String _kDefaultPath = 'default_media_path';
   static const String _kDefaultType = 'default_media_type';
   static const String _kDefaultAudioPath = 'default_media_audio_path';
+  static const String _kQueueDefaultTitle = '节目';
 
   SharedPreferences? _prefs;
   MediaItem? _defaultBackground;
@@ -249,13 +286,29 @@ class AppState extends ChangeNotifier {
     return true;
   }
 
-  MediaItem? createItemFromPath(String path, {String? audioPath}) {
+  MediaItem? createItemFromPath(
+    String path, {
+    String? audioPath,
+    String? title,
+    String? artist,
+  }) {
     final extension = _normalizedExtension(path);
     if (imageExtensions.contains(extension)) {
-      return MediaItem(type: MediaType.image, path: path, audioPath: audioPath);
+      return MediaItem(
+        type: MediaType.image,
+        path: path,
+        audioPath: audioPath,
+        title: title,
+        artist: artist,
+      );
     }
     if (videoExtensions.contains(extension)) {
-      return MediaItem(type: MediaType.video, path: path);
+      return MediaItem(
+        type: MediaType.video,
+        path: path,
+        title: title,
+        artist: artist,
+      );
     }
     return null;
   }
@@ -275,15 +328,47 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void addQueueItem(MediaItem item) {
+  MediaItem addQueueItem(MediaItem item) {
     _playQueue.removeWhere((oldItem) {
       return oldItem.type == item.type &&
           oldItem.path == item.path &&
           oldItem.audioPath == item.audioPath;
     });
-    _playQueue.add(item);
+    final normalizedItem = _normalizedQueueItem(item);
+    _playQueue.add(normalizedItem);
     _normalizeNextIndex();
     notifyListeners();
+    return normalizedItem;
+  }
+
+  bool removeQueueItemAt(int index) {
+    if (index < 0 || index >= _playQueue.length) {
+      return false;
+    }
+    _playQueue.removeAt(index);
+    if (_playQueue.isEmpty) {
+      _nextPlayIndex = 0;
+    } else if (index < _nextPlayIndex) {
+      _nextPlayIndex -= 1;
+    }
+    _normalizeNextIndex();
+    notifyListeners();
+    return true;
+  }
+
+  MediaItem? updateQueueItemAt(int index, MediaItem nextItem) {
+    if (index < 0 || index >= _playQueue.length) {
+      return null;
+    }
+    final updatedItem = _normalizedQueueItem(nextItem, excludeIndex: index);
+    final currentStage = _stageOverride;
+    final oldItem = _playQueue[index];
+    _playQueue[index] = updatedItem;
+    if (currentStage != null && _isSameMediaSource(currentStage, oldItem)) {
+      _stageOverride = updatedItem;
+    }
+    notifyListeners();
+    return updatedItem;
   }
 
   void reorderPlayQueue(int oldIndex, int newIndex) {
@@ -393,6 +478,58 @@ class AppState extends ChangeNotifier {
       return;
     }
     _nextPlayIndex = _nextPlayIndex % _playQueue.length;
+  }
+
+  MediaItem _normalizedQueueItem(MediaItem item, {int? excludeIndex}) {
+    final resolvedTitle = _resolveUniqueQueueTitle(
+      item.title,
+      excludeIndex: excludeIndex,
+    );
+    final resolvedArtist = _normalizedTextOrNull(item.artist);
+    return MediaItem(
+      type: item.type,
+      path: item.path,
+      audioPath: item.audioPath,
+      title: resolvedTitle,
+      artist: resolvedArtist,
+    );
+  }
+
+  String _resolveUniqueQueueTitle(String? preferredTitle, {int? excludeIndex}) {
+    final baseTitle =
+        _normalizedTextOrNull(preferredTitle) ?? _kQueueDefaultTitle;
+    final usedTitles = <String>{};
+    for (var i = 0; i < _playQueue.length; i++) {
+      if (excludeIndex != null && i == excludeIndex) {
+        continue;
+      }
+      usedTitles.add(_playQueue[i].displayTitle);
+    }
+
+    if (!usedTitles.contains(baseTitle)) {
+      return baseTitle;
+    }
+
+    var suffix = 2;
+    while (usedTitles.contains('$baseTitle$suffix')) {
+      suffix++;
+    }
+    return '$baseTitle$suffix';
+  }
+
+  String? _normalizedTextOrNull(String? value) {
+    if (value == null) {
+      return null;
+    }
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    return trimmed;
+  }
+
+  bool _isSameMediaSource(MediaItem a, MediaItem b) {
+    return a.type == b.type && a.path == b.path && a.audioPath == b.audioPath;
   }
 
   String _normalizedExtension(String path) {

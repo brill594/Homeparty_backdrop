@@ -60,6 +60,8 @@ class ControlPageState extends State<ControlPage> {
     final item = widget.appState.createItemFromPath(
       input.mediaPath,
       audioPath: input.audioPath,
+      title: input.title,
+      artist: input.artist,
     );
     if (item == null) {
       _showSnackBar('添加失败：文件类型与选择的播放类型不匹配。');
@@ -82,8 +84,87 @@ class ControlPageState extends State<ControlPage> {
       return;
     }
 
-    widget.appState.addQueueItem(item);
-    _showSnackBar('已添加到播放列表：${item.fileName}');
+    final addedItem = widget.appState.addQueueItem(item);
+    _showSnackBar(
+      '已添加：${addedItem.displayTitle}（演唱者：${addedItem.displayArtist}）',
+    );
+  }
+
+  Future<void> _editPlayableItem(int index) async {
+    if (_addingItem) {
+      return;
+    }
+    final queue = widget.appState.playQueue;
+    if (index < 0 || index >= queue.length) {
+      return;
+    }
+    final current = queue[index];
+
+    final input = await showDialog<_PlayableInput>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _AddPlayableDialog(
+        dialogTitle: '编辑播放条目',
+        submitButtonText: '保存并校验',
+        initialValue: _PlayableInput(
+          type: current.type,
+          mediaPath: current.path,
+          audioPath: current.audioPath,
+          title: current.title,
+          artist: current.artist,
+        ),
+      ),
+    );
+    if (input == null) {
+      return;
+    }
+
+    final nextItem = widget.appState.createItemFromPath(
+      input.mediaPath,
+      audioPath: input.audioPath,
+      title: input.title,
+      artist: input.artist,
+    );
+    if (nextItem == null) {
+      _showSnackBar('编辑失败：文件类型与选择的播放类型不匹配。');
+      return;
+    }
+
+    setState(() {
+      _addingItem = true;
+    });
+    final validationError = await _validatePlayable(nextItem);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _addingItem = false;
+    });
+    if (validationError != null) {
+      _showSnackBar(validationError);
+      return;
+    }
+
+    final updatedItem = widget.appState.updateQueueItemAt(index, nextItem);
+    if (updatedItem == null) {
+      _showSnackBar('编辑失败：条目已不存在。');
+      return;
+    }
+    _showSnackBar(
+      '已更新：${updatedItem.displayTitle}（演唱者：${updatedItem.displayArtist}）',
+    );
+  }
+
+  void _deletePlayableItem(int index) {
+    final queue = widget.appState.playQueue;
+    if (index < 0 || index >= queue.length) {
+      return;
+    }
+    final title = queue[index].displayTitle;
+    final removed = widget.appState.removeQueueItemAt(index);
+    if (removed) {
+      _showSnackBar('已删除：$title');
+    }
   }
 
   Future<String?> _validatePlayable(MediaItem item) async {
@@ -159,7 +240,9 @@ class ControlPageState extends State<ControlPage> {
 
     final current = widget.appState.stageOverride;
     if (current != null) {
-      _showSnackBar('正在播放：${current.fileName}');
+      _showSnackBar(
+        '正在播放：${current.displayTitle}（演唱者：${current.displayArtist}）',
+      );
     }
   }
 
@@ -408,11 +491,11 @@ class ControlPageState extends State<ControlPage> {
                           itemBuilder: (context, index) {
                             final item = queue[index];
                             return _QueueTile(
-                              key: ValueKey(
-                                '${item.type.name}|${item.path}|${item.audioPath ?? ''}',
-                              ),
+                              key: ObjectKey(item),
                               item: item,
                               index: index,
+                              onEdit: () => _editPlayableItem(index),
+                              onDelete: () => _deletePlayableItem(index),
                             );
                           },
                         ),
@@ -481,7 +564,9 @@ class _PlaybackStatusCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final nextText = nextItem == null ? '无' : nextItem!.fileName;
+    final nextText = nextItem == null
+        ? '无'
+        : '${nextItem!.displayTitle}（${nextItem!.displayArtist}）';
     return DecoratedBox(
       decoration: BoxDecoration(
         color: const Color(0xFF151A1A),
@@ -511,14 +596,22 @@ class _PlaybackStatusCard extends StatelessWidget {
 }
 
 class _QueueTile extends StatelessWidget {
-  const _QueueTile({super.key, required this.item, required this.index});
+  const _QueueTile({
+    super.key,
+    required this.item,
+    required this.index,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
   final MediaItem item;
   final int index;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
-    final subtitle = item.type == MediaType.image
+    final mediaInfo = item.type == MediaType.image
         ? '图片 + 音乐：${item.audioPath?.split('/').last ?? '未设置'}'
         : '视频';
     return Material(
@@ -527,11 +620,27 @@ class _QueueTile extends StatelessWidget {
       borderRadius: BorderRadius.circular(10),
       child: ListTile(
         leading: Icon(item.type == MediaType.video ? Icons.movie : Icons.image),
-        title: Text(item.fileName),
-        subtitle: Text(subtitle),
-        trailing: ReorderableDragStartListener(
-          index: index,
-          child: const Icon(Icons.drag_indicator),
+        title: Text(item.displayTitle),
+        subtitle: Text('演唱者：${item.displayArtist}\n$mediaInfo'),
+        isThreeLine: true,
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            IconButton(
+              onPressed: onEdit,
+              icon: const Icon(Icons.edit_outlined),
+              tooltip: '编辑',
+            ),
+            IconButton(
+              onPressed: onDelete,
+              icon: const Icon(Icons.delete_outline),
+              tooltip: '删除',
+            ),
+            ReorderableDragStartListener(
+              index: index,
+              child: const Icon(Icons.drag_indicator),
+            ),
+          ],
         ),
       ),
     );
@@ -561,25 +670,61 @@ class _PlayableInput {
     required this.type,
     required this.mediaPath,
     this.audioPath,
+    this.title,
+    this.artist,
   });
 
   final MediaType type;
   final String mediaPath;
   final String? audioPath;
+  final String? title;
+  final String? artist;
 }
 
 class _AddPlayableDialog extends StatefulWidget {
-  const _AddPlayableDialog();
+  const _AddPlayableDialog({
+    this.dialogTitle = '添加播放文件',
+    this.submitButtonText = '添加并校验',
+    this.initialValue,
+  });
+
+  final String dialogTitle;
+  final String submitButtonText;
+  final _PlayableInput? initialValue;
 
   @override
   State<_AddPlayableDialog> createState() => _AddPlayableDialogState();
 }
 
 class _AddPlayableDialogState extends State<_AddPlayableDialog> {
-  MediaType _selectedType = MediaType.image;
+  late MediaType _selectedType;
   String? _imagePath;
   String? _videoPath;
   String? _audioPath;
+  late final TextEditingController _titleController;
+  late final TextEditingController _artistController;
+
+  @override
+  void initState() {
+    super.initState();
+    final initialValue = widget.initialValue;
+    _selectedType = initialValue?.type ?? MediaType.image;
+    if (initialValue?.type == MediaType.video) {
+      _videoPath = initialValue?.mediaPath;
+    } else {
+      _imagePath = initialValue?.mediaPath;
+      _audioPath = initialValue?.audioPath;
+    }
+    _titleController = TextEditingController(text: initialValue?.title ?? '');
+    _artistController = TextEditingController(text: initialValue?.artist ?? '');
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _artistController.dispose();
+    super.dispose();
+  }
 
   Future<void> _pickImage() async {
     final path = await _pickFile(
@@ -654,67 +799,85 @@ class _AddPlayableDialogState extends State<_AddPlayableDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('添加播放文件'),
+      title: Text(widget.dialogTitle),
       content: SizedBox(
         width: 520,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            SegmentedButton<MediaType>(
-              segments: const <ButtonSegment<MediaType>>[
-                ButtonSegment<MediaType>(
-                  value: MediaType.image,
-                  label: Text('图片'),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              SegmentedButton<MediaType>(
+                segments: const <ButtonSegment<MediaType>>[
+                  ButtonSegment<MediaType>(
+                    value: MediaType.image,
+                    label: Text('图片'),
+                  ),
+                  ButtonSegment<MediaType>(
+                    value: MediaType.video,
+                    label: Text('视频'),
+                  ),
+                ],
+                selected: <MediaType>{_selectedType},
+                onSelectionChanged: (selection) {
+                  setState(() {
+                    _selectedType = selection.first;
+                  });
+                },
+              ),
+              const SizedBox(height: 14),
+              if (_selectedType == MediaType.image) ...<Widget>[
+                FilledButton.tonalIcon(
+                  onPressed: _pickImage,
+                  icon: const Icon(Icons.image),
+                  label: const Text('选择图片（必选）'),
                 ),
-                ButtonSegment<MediaType>(
-                  value: MediaType.video,
-                  label: Text('视频'),
+                if (_imagePath != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text('图片：$_imagePath'),
+                  ),
+                const SizedBox(height: 8),
+                FilledButton.tonalIcon(
+                  onPressed: _pickAudio,
+                  icon: const Icon(Icons.music_note),
+                  label: const Text('选择音乐（必选）'),
                 ),
+                if (_audioPath != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text('音乐：$_audioPath'),
+                  ),
+              ] else ...<Widget>[
+                FilledButton.tonalIcon(
+                  onPressed: _pickVideo,
+                  icon: const Icon(Icons.movie),
+                  label: const Text('选择视频（必选）'),
+                ),
+                if (_videoPath != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text('视频：$_videoPath'),
+                  ),
               ],
-              selected: <MediaType>{_selectedType},
-              onSelectionChanged: (selection) {
-                setState(() {
-                  _selectedType = selection.first;
-                });
-              },
-            ),
-            const SizedBox(height: 14),
-            if (_selectedType == MediaType.image) ...<Widget>[
-              FilledButton.tonalIcon(
-                onPressed: _pickImage,
-                icon: const Icon(Icons.image),
-                label: const Text('选择图片（必选）'),
-              ),
-              if (_imagePath != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text('图片：$_imagePath'),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _titleController,
+                decoration: const InputDecoration(
+                  labelText: '节目标题（可选，留空自动生成）',
+                  border: OutlineInputBorder(),
                 ),
-              const SizedBox(height: 8),
-              FilledButton.tonalIcon(
-                onPressed: _pickAudio,
-                icon: const Icon(Icons.music_note),
-                label: const Text('选择音乐（必选）'),
               ),
-              if (_audioPath != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text('音乐：$_audioPath'),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _artistController,
+                decoration: const InputDecoration(
+                  labelText: '演唱者（可选）',
+                  border: OutlineInputBorder(),
                 ),
-            ] else ...<Widget>[
-              FilledButton.tonalIcon(
-                onPressed: _pickVideo,
-                icon: const Icon(Icons.movie),
-                label: const Text('选择视频（必选）'),
               ),
-              if (_videoPath != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text('视频：$_videoPath'),
-                ),
             ],
-          ],
+          ),
         ),
       ),
       actions: <Widget>[
@@ -725,12 +888,16 @@ class _AddPlayableDialogState extends State<_AddPlayableDialog> {
         FilledButton(
           onPressed: _canSubmit
               ? () {
+                  final title = _normalizedTextOrNull(_titleController.text);
+                  final artist = _normalizedTextOrNull(_artistController.text);
                   if (_selectedType == MediaType.image) {
                     Navigator.of(context).pop(
                       _PlayableInput(
                         type: MediaType.image,
                         mediaPath: _imagePath!,
                         audioPath: _audioPath!,
+                        title: title,
+                        artist: artist,
                       ),
                     );
                     return;
@@ -739,13 +906,23 @@ class _AddPlayableDialogState extends State<_AddPlayableDialog> {
                     _PlayableInput(
                       type: MediaType.video,
                       mediaPath: _videoPath!,
+                      title: title,
+                      artist: artist,
                     ),
                   );
                 }
               : null,
-          child: const Text('添加并校验'),
+          child: Text(widget.submitButtonText),
         ),
       ],
     );
+  }
+
+  String? _normalizedTextOrNull(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    return trimmed;
   }
 }

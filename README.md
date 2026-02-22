@@ -1,6 +1,6 @@
 # HomeParty Backdrop
 
-HomeParty Backdrop is a Flutter macOS app for running event backdrops and program playback from a control UI.
+HomeParty Backdrop is a Flutter macOS app (currently) for running event backdrops and program playback from a control UI.
 
 It provides:
 - a Control page for queueing and triggering playback,

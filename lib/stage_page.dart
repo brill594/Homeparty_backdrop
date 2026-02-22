@@ -24,6 +24,7 @@ class StagePage extends StatefulWidget {
 
 class _StagePageState extends State<StagePage> {
   static const Duration _overlayAutoHideDelay = Duration(seconds: 3);
+  static const Duration _videoFirstFrameTimeout = Duration(seconds: 4);
 
   final ja.AudioPlayer _audioPlayer = ja.AudioPlayer();
   final FocusNode _keyboardFocusNode = FocusNode(debugLabel: 'stage_keyboard');
@@ -196,7 +197,11 @@ class _StagePageState extends State<StagePage> {
         a.artist == b.artist;
   }
 
-  Future<void> _switchPlaybackForMedia(MediaItem? media, int token) async {
+  Future<void> _switchPlaybackForMedia(
+    MediaItem? media,
+    int token, {
+    bool useSoftwareVideoOutput = false,
+  }) async {
     await _stopAndDisposePlaybackResources();
 
     if (!mounted || token != _syncToken) {
@@ -211,7 +216,12 @@ class _StagePageState extends State<StagePage> {
 
     if (media.type == MediaType.video) {
       final player = Player();
-      final controller = VideoController(player);
+      final controller = VideoController(
+        player,
+        configuration: VideoControllerConfiguration(
+          enableHardwareAcceleration: !useSoftwareVideoOutput,
+        ),
+      );
       final mediaUri = Uri.file(media.path).toString();
       try {
         await player.setPlaylistMode(PlaylistMode.none);
@@ -246,6 +256,15 @@ class _StagePageState extends State<StagePage> {
         _videoPlayer = player;
         _videoController = controller;
         _isVideoPlaying = player.state.playing;
+        unawaited(
+          _watchVideoFirstFrameAndRecover(
+            media: media,
+            player: player,
+            controller: controller,
+            token: token,
+            useSoftwareVideoOutput: useSoftwareVideoOutput,
+          ),
+        );
       } catch (_) {
         _playbackNotice = '视频初始化失败，请检查文件格式或系统解码能力。';
         await player.dispose();
@@ -316,6 +335,39 @@ class _StagePageState extends State<StagePage> {
       setState(() {
         _playbackNotice = '节目播放结束，但尚未设置默认背景。';
       });
+    }
+  }
+
+  Future<void> _watchVideoFirstFrameAndRecover({
+    required MediaItem media,
+    required Player player,
+    required VideoController controller,
+    required int token,
+    required bool useSoftwareVideoOutput,
+  }) async {
+    try {
+      await controller.waitUntilFirstFrameRendered.timeout(
+        _videoFirstFrameTimeout,
+      );
+    } catch (_) {
+      if (useSoftwareVideoOutput) {
+        return;
+      }
+      if (!mounted || token != _syncToken) {
+        return;
+      }
+      if (_videoPlayer != player || media.type != MediaType.video) {
+        return;
+      }
+      setState(() {
+        _playbackNotice = '检测到视频画面未输出，正在切换兼容模式...';
+      });
+      final retryToken = ++_syncToken;
+      await _switchPlaybackForMedia(
+        media,
+        retryToken,
+        useSoftwareVideoOutput: true,
+      );
     }
   }
 
@@ -479,7 +531,11 @@ class _StagePageState extends State<StagePage> {
 
     return ColoredBox(
       color: Colors.black,
-      child: Video(controller: controller, fit: BoxFit.contain),
+      child: Video(
+        key: ValueKey<VideoController>(controller),
+        controller: controller,
+        fit: BoxFit.contain,
+      ),
     );
   }
 

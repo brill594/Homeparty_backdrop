@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:just_audio/just_audio.dart';
+import 'package:just_audio/just_audio.dart' as ja;
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -25,12 +25,14 @@ class StagePage extends StatefulWidget {
 class _StagePageState extends State<StagePage> {
   static const Duration _overlayAutoHideDelay = Duration(seconds: 3);
 
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  final ja.AudioPlayer _audioPlayer = ja.AudioPlayer();
   final FocusNode _keyboardFocusNode = FocusNode(debugLabel: 'stage_keyboard');
 
   Player? _videoPlayer;
   VideoController? _videoController;
   StreamSubscription<bool>? _videoPlayingSubscription;
+  StreamSubscription<bool>? _videoCompletedSubscription;
+  StreamSubscription<ja.PlayerState>? _audioPlayerStateSubscription;
   WindowController? _playlistManagerWindowController;
   MediaItem? _activeMedia;
   bool _activeUsingOverride = false;
@@ -38,9 +40,9 @@ class _StagePageState extends State<StagePage> {
 
   bool _isFullscreen = false;
   bool _isVideoPlaying = false;
-  bool _isVideoLooping = true;
   String? _playbackNotice;
   int _syncToken = 0;
+  int _autoResetHandledToken = -1;
   Timer? _overlayHideTimer;
   bool _overlayVisible = true;
 
@@ -70,9 +72,19 @@ class _StagePageState extends State<StagePage> {
     _videoPlayer = null;
     _videoController = null;
     final oldVideoPlayingSubscription = _videoPlayingSubscription;
+    final oldVideoCompletedSubscription = _videoCompletedSubscription;
+    final oldAudioPlayerStateSubscription = _audioPlayerStateSubscription;
     _videoPlayingSubscription = null;
+    _videoCompletedSubscription = null;
+    _audioPlayerStateSubscription = null;
     if (oldVideoPlayingSubscription != null) {
       unawaited(oldVideoPlayingSubscription.cancel());
+    }
+    if (oldVideoCompletedSubscription != null) {
+      unawaited(oldVideoCompletedSubscription.cancel());
+    }
+    if (oldAudioPlayerStateSubscription != null) {
+      unawaited(oldAudioPlayerStateSubscription.cancel());
     }
     if (oldVideoPlayer != null) {
       unawaited(oldVideoPlayer.dispose());
@@ -202,9 +214,7 @@ class _StagePageState extends State<StagePage> {
       final controller = VideoController(player);
       final mediaUri = Uri.file(media.path).toString();
       try {
-        await player.setPlaylistMode(
-          _isVideoLooping ? PlaylistMode.single : PlaylistMode.none,
-        );
+        await player.setPlaylistMode(PlaylistMode.none);
         await player.open(Media(mediaUri), play: true);
         if (!mounted || token != _syncToken) {
           await player.dispose();
@@ -222,6 +232,17 @@ class _StagePageState extends State<StagePage> {
             _isVideoPlaying = playing;
           });
         });
+        _videoCompletedSubscription = player.stream.completed.listen((
+          bool completed,
+        ) {
+          if (!completed || !mounted || token != _syncToken) {
+            return;
+          }
+          if (_videoPlayer != player) {
+            return;
+          }
+          unawaited(_handleProgramCompleted(token));
+        });
         _videoPlayer = player;
         _videoController = controller;
         _isVideoPlaying = player.state.playing;
@@ -232,11 +253,24 @@ class _StagePageState extends State<StagePage> {
     } else if (media.hasAudioPath) {
       final audioPath = media.audioPath!;
       try {
+        _audioPlayerStateSubscription = _audioPlayer.playerStateStream.listen((
+          ja.PlayerState state,
+        ) {
+          if (state.processingState != ja.ProcessingState.completed) {
+            return;
+          }
+          if (!mounted || token != _syncToken) {
+            return;
+          }
+          unawaited(_handleProgramCompleted(token));
+        });
         await _audioPlayer.setFilePath(audioPath);
-        await _audioPlayer.setLoopMode(LoopMode.one);
+        await _audioPlayer.setLoopMode(ja.LoopMode.off);
         await _audioPlayer.play();
       } catch (_) {
         _playbackNotice = '伴奏播放失败，当前已静音。';
+        await _audioPlayerStateSubscription?.cancel();
+        _audioPlayerStateSubscription = null;
         await _audioPlayer.stop();
       }
     }
@@ -252,7 +286,11 @@ class _StagePageState extends State<StagePage> {
     _videoPlayer = null;
     _videoController = null;
     await _videoPlayingSubscription?.cancel();
+    await _videoCompletedSubscription?.cancel();
+    await _audioPlayerStateSubscription?.cancel();
     _videoPlayingSubscription = null;
+    _videoCompletedSubscription = null;
+    _audioPlayerStateSubscription = null;
     if (oldVideoPlayer != null) {
       await oldVideoPlayer.stop();
       await oldVideoPlayer.dispose();
@@ -260,6 +298,25 @@ class _StagePageState extends State<StagePage> {
 
     _isVideoPlaying = false;
     await _audioPlayer.stop();
+  }
+
+  Future<void> _handleProgramCompleted(int token) async {
+    if (!mounted || token != _syncToken) {
+      return;
+    }
+    if (_autoResetHandledToken == token) {
+      return;
+    }
+    if (!widget.appState.isUsingStageOverride) {
+      return;
+    }
+    _autoResetHandledToken = token;
+    final result = widget.appState.resetToDefaultBackground();
+    if (result == ResetToDefaultResult.defaultNotSet && mounted) {
+      setState(() {
+        _playbackNotice = '节目播放结束，但尚未设置默认背景。';
+      });
+    }
   }
 
   Future<void> _toggleVideoPauseResume() async {
@@ -277,22 +334,6 @@ class _StagePageState extends State<StagePage> {
     }
     setState(() {
       _isVideoPlaying = player.state.playing;
-    });
-  }
-
-  Future<void> _toggleVideoLooping() async {
-    final next = !_isVideoLooping;
-    final player = _videoPlayer;
-    if (player != null) {
-      await player.setPlaylistMode(
-        next ? PlaylistMode.single : PlaylistMode.none,
-      );
-    }
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _isVideoLooping = next;
     });
   }
 
@@ -387,10 +428,6 @@ class _StagePageState extends State<StagePage> {
                               _isVideoPlaying ? '暂停(Space)' : '继续(Space)',
                             ),
                           ),
-                          FilledButton.tonal(
-                            onPressed: _toggleVideoLooping,
-                            child: Text(_isVideoLooping ? '循环: 开' : '循环: 关'),
-                          ),
                         ],
                       ],
                     ),
@@ -442,7 +479,7 @@ class _StagePageState extends State<StagePage> {
 
     return ColoredBox(
       color: Colors.black,
-      child: Video(controller: controller, fit: BoxFit.cover),
+      child: Video(controller: controller, fit: BoxFit.contain),
     );
   }
 
@@ -456,9 +493,9 @@ class _StagePageState extends State<StagePage> {
         ? '等待控制台发送节目。'
         : media.type == MediaType.image
         ? media.hasAudioPath
-              ? '类型：图片 | 伴奏：${media.audioPath}'
+              ? '类型：图片 | 伴奏：${media.audioPath} | 伴奏结束后自动切回默认背景'
               : '类型：图片 | 伴奏：静音'
-        : '类型：视频 | 循环：${_isVideoLooping ? '开' : '关'} | Space：暂停/继续';
+        : '类型：视频 | Space：暂停/继续 | 结束后自动切回默认背景';
     final keyTips =
         '热键：下一项(${widget.appState.playbackTriggerKey.label}) | 切回默认(${widget.appState.resetTriggerKey.label})';
 

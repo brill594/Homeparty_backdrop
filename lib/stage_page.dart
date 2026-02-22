@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
@@ -26,6 +28,7 @@ class _StagePageState extends State<StagePage> {
   final FocusNode _keyboardFocusNode = FocusNode(debugLabel: 'stage_keyboard');
 
   VideoPlayerController? _videoController;
+  WindowController? _playlistManagerWindowController;
   MediaItem? _activeMedia;
   bool _activeUsingOverride = false;
   int _activePlaySignal = -1;
@@ -43,6 +46,7 @@ class _StagePageState extends State<StagePage> {
     super.initState();
     widget.appState.addListener(_onAppStateChanged);
     unawaited(_configureStageWindowAtLaunch());
+    unawaited(_openPlaylistManagerWindow());
     unawaited(WakelockPlus.enable());
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -64,6 +68,12 @@ class _StagePageState extends State<StagePage> {
     oldVideoController?.removeListener(_onVideoStateChanged);
     oldVideoController?.dispose();
 
+    final playlistWindowController = _playlistManagerWindowController;
+    _playlistManagerWindowController = null;
+    if (playlistWindowController != null) {
+      unawaited(playlistWindowController.close());
+    }
+
     _audioPlayer.dispose();
     _keyboardFocusNode.dispose();
     _overlayHideTimer?.cancel();
@@ -74,6 +84,27 @@ class _StagePageState extends State<StagePage> {
   Future<void> _configureStageWindowAtLaunch() async {
     await windowManager.show();
     await windowManager.focus();
+  }
+
+  Future<void> _openPlaylistManagerWindow() async {
+    if (_playlistManagerWindowController != null) {
+      return;
+    }
+    final newWindow = await DesktopMultiWindow.createWindow(
+      jsonEncode(<String, dynamic>{
+        'kind': 'playlist_manager',
+        'hostWindowId': 0,
+      }),
+    );
+    if (!mounted) {
+      await newWindow.close();
+      return;
+    }
+    _playlistManagerWindowController = newWindow;
+    await newWindow.setFrame(const Rect.fromLTWH(100, 120, 560, 760));
+    await newWindow.center();
+    await newWindow.setTitle('舞台播放列表管理');
+    await newWindow.show();
   }
 
   KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {

@@ -1,14 +1,31 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
 import 'control_page.dart';
+import 'playlist_manager_window.dart';
+import 'playlist_window_protocol.dart';
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  if (args.isNotEmpty && args.first == 'multi_window') {
+    final windowId = args.length > 1 ? int.tryParse(args[1]) : null;
+    final rawArguments = args.length > 2 ? args[2] : '';
+    final arguments = _decodeWindowArguments(rawArguments);
+    final windowKind = arguments['kind']?.toString();
+    if (windowId != null && windowKind == 'playlist_manager') {
+      runApp(
+        PlaylistManagerWindowApp(windowId: windowId, arguments: arguments),
+      );
+      return;
+    }
+  }
 
   // macOS Runner config reminder:
   // 1) Add com.apple.security.files.user-selected.read-only=true
@@ -42,6 +59,21 @@ Future<void> main() async {
   );
 }
 
+Map<String, dynamic> _decodeWindowArguments(String rawArguments) {
+  if (rawArguments.isEmpty) {
+    return <String, dynamic>{};
+  }
+  try {
+    final decoded = jsonDecode(rawArguments);
+    if (decoded is Map) {
+      return decoded.map((key, value) => MapEntry(key.toString(), value));
+    }
+  } catch (_) {
+    return <String, dynamic>{};
+  }
+  return <String, dynamic>{};
+}
+
 class HomepartyApp extends StatefulWidget {
   const HomepartyApp({
     super.key,
@@ -65,13 +97,94 @@ class _HomepartyAppState extends State<HomepartyApp> {
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_onHardwareKeyEvent);
+    DesktopMultiWindow.setMethodHandler(_onWindowMethodCall);
     unawaited(_waitForMainWindowReady());
   }
 
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_onHardwareKeyEvent);
+    DesktopMultiWindow.setMethodHandler(null);
     super.dispose();
+  }
+
+  Future<dynamic> _onWindowMethodCall(MethodCall call, int fromWindowId) async {
+    if (fromWindowId <= 0) {
+      return _buildWindowResponse(ok: false, error: '仅支持子窗口调用。');
+    }
+    switch (call.method) {
+      case PlaylistWindowMethods.getSnapshot:
+        return _buildWindowResponse(ok: true);
+      case PlaylistWindowMethods.addItem:
+        final args = _toMap(call.arguments);
+        final item = MediaItem.fromJson(args?[PlaylistWindowPayloadKeys.item]);
+        if (item == null) {
+          return _buildWindowResponse(ok: false, error: '添加失败：节目数据无效。');
+        }
+        widget.appState.addQueueItem(item);
+        return _buildWindowResponse(ok: true);
+      case PlaylistWindowMethods.updateItem:
+        final args = _toMap(call.arguments);
+        final index = _toInt(args?[PlaylistWindowPayloadKeys.index]);
+        final item = MediaItem.fromJson(args?[PlaylistWindowPayloadKeys.item]);
+        if (index == null || item == null) {
+          return _buildWindowResponse(ok: false, error: '编辑失败：参数无效。');
+        }
+        final updated = widget.appState.updateQueueItemAt(index, item);
+        if (updated == null) {
+          return _buildWindowResponse(ok: false, error: '编辑失败：条目不存在。');
+        }
+        return _buildWindowResponse(ok: true);
+      case PlaylistWindowMethods.deleteItem:
+        final args = _toMap(call.arguments);
+        final index = _toInt(args?[PlaylistWindowPayloadKeys.index]);
+        if (index == null) {
+          return _buildWindowResponse(ok: false, error: '删除失败：参数无效。');
+        }
+        final removed = widget.appState.removeQueueItemAt(index);
+        if (!removed) {
+          return _buildWindowResponse(ok: false, error: '删除失败：条目不存在。');
+        }
+        return _buildWindowResponse(ok: true);
+      case PlaylistWindowMethods.reorder:
+        final args = _toMap(call.arguments);
+        final oldIndex = _toInt(args?[PlaylistWindowPayloadKeys.oldIndex]);
+        final newIndex = _toInt(args?[PlaylistWindowPayloadKeys.newIndex]);
+        if (oldIndex == null || newIndex == null) {
+          return _buildWindowResponse(ok: false, error: '排序失败：参数无效。');
+        }
+        widget.appState.reorderPlayQueue(oldIndex, newIndex);
+        return _buildWindowResponse(ok: true);
+    }
+    return _buildWindowResponse(ok: false, error: '未知操作：${call.method}');
+  }
+
+  Map<String, dynamic> _buildWindowResponse({required bool ok, String? error}) {
+    return <String, dynamic>{
+      'ok': ok,
+      'error': error,
+      'snapshot': widget.appState.buildQueueSnapshot(),
+    };
+  }
+
+  Map<String, dynamic>? _toMap(dynamic raw) {
+    if (raw is! Map) {
+      return null;
+    }
+    return raw.map((key, value) => MapEntry(key.toString(), value));
+  }
+
+  int? _toInt(dynamic raw) {
+    if (raw is int) {
+      return raw;
+    }
+    if (raw is num) {
+      return raw.toInt();
+    }
+    if (raw is String) {
+      return int.tryParse(raw);
+    }
+    return null;
   }
 
   Future<void> _waitForMainWindowReady() async {

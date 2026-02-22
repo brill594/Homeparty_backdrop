@@ -548,4 +548,26 @@ class AppState extends ChangeNotifier {
     }
     return null;
   }
+
+  Map<String, dynamic> buildQueueSnapshot() {
+    return <String, dynamic>{
+      'queue': _playQueue.map((item) => item.toJson()).toList(),
+      'nextPlayIndex': _nextPlayIndex,
+      'currentQueueIndex': _currentQueueIndex(),
+      'playbackReady': _playbackReady,
+    };
+  }
+
+  int? _currentQueueIndex() {
+    final stageItem = _stageOverride;
+    if (stageItem == null || _playQueue.isEmpty) {
+      return null;
+    }
+    for (var i = 0; i < _playQueue.length; i++) {
+      if (_isSameMediaSource(_playQueue[i], stageItem)) {
+        return i;
+      }
+    }
+    return null;
+  }
 }

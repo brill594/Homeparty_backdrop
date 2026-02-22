@@ -7,7 +7,7 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:video_player/video_player.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
@@ -637,14 +637,15 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
   }
 
   Future<String?> _validateVideo(String path) async {
-    final controller = VideoPlayerController.file(File(path));
+    final player = Player();
     try {
-      await controller.initialize();
+      await player.open(Media(Uri.file(path).toString()), play: false);
+      await player.stop();
       return null;
     } catch (_) {
       return '视频初始化失败，已拒绝保存。';
     } finally {
-      await controller.dispose();
+      await player.dispose();
     }
   }
 

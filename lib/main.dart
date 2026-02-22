@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'app_state.dart';
@@ -13,6 +14,7 @@ import 'playlist_window_protocol.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  MediaKit.ensureInitialized();
 
   if (args.isNotEmpty && args.first == 'multi_window') {
     final windowId = args.length > 1 ? int.tryParse(args[1]) : null;

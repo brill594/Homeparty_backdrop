@@ -5,7 +5,7 @@ import 'dart:ui' as ui;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:video_player/video_player.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'app_state.dart';
 import 'stage_page.dart';
@@ -226,14 +226,15 @@ class ControlPageState extends State<ControlPage> {
   }
 
   Future<String?> _validateVideo(String path) async {
-    final controller = VideoPlayerController.file(File(path));
+    final player = Player();
     try {
-      await controller.initialize();
+      await player.open(Media(Uri.file(path).toString()), play: false);
+      await player.stop();
       return null;
     } catch (_) {
       return '视频初始化失败，已拒绝添加。';
     } finally {
-      await controller.dispose();
+      await player.dispose();
     }
   }
 

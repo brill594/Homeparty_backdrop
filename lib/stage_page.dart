@@ -6,7 +6,8 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:video_player/video_player.dart';
+import 'package:media_kit/media_kit.dart';
+import 'package:media_kit_video/media_kit_video.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -27,7 +28,9 @@ class _StagePageState extends State<StagePage> {
   final AudioPlayer _audioPlayer = AudioPlayer();
   final FocusNode _keyboardFocusNode = FocusNode(debugLabel: 'stage_keyboard');
 
-  VideoPlayerController? _videoController;
+  Player? _videoPlayer;
+  VideoController? _videoController;
+  StreamSubscription<bool>? _videoPlayingSubscription;
   WindowController? _playlistManagerWindowController;
   MediaItem? _activeMedia;
   bool _activeUsingOverride = false;
@@ -63,10 +66,17 @@ class _StagePageState extends State<StagePage> {
     widget.appState.removeListener(_onAppStateChanged);
     _syncToken++;
 
-    final oldVideoController = _videoController;
+    final oldVideoPlayer = _videoPlayer;
+    _videoPlayer = null;
     _videoController = null;
-    oldVideoController?.removeListener(_onVideoStateChanged);
-    oldVideoController?.dispose();
+    final oldVideoPlayingSubscription = _videoPlayingSubscription;
+    _videoPlayingSubscription = null;
+    if (oldVideoPlayingSubscription != null) {
+      unawaited(oldVideoPlayingSubscription.cancel());
+    }
+    if (oldVideoPlayer != null) {
+      unawaited(oldVideoPlayer.dispose());
+    }
 
     final playlistWindowController = _playlistManagerWindowController;
     _playlistManagerWindowController = null;
@@ -188,21 +198,36 @@ class _StagePageState extends State<StagePage> {
     }
 
     if (media.type == MediaType.video) {
-      final controller = VideoPlayerController.file(File(media.path));
+      final player = Player();
+      final controller = VideoController(player);
+      final mediaUri = Uri.file(media.path).toString();
       try {
-        await controller.initialize();
+        await player.setPlaylistMode(
+          _isVideoLooping ? PlaylistMode.single : PlaylistMode.none,
+        );
+        await player.open(Media(mediaUri), play: true);
         if (!mounted || token != _syncToken) {
-          await controller.dispose();
+          await player.dispose();
           return;
         }
-        controller.addListener(_onVideoStateChanged);
-        await controller.setLooping(_isVideoLooping);
-        await controller.play();
+        _videoPlayingSubscription = player.stream.playing.listen((
+          bool playing,
+        ) {
+          if (!mounted ||
+              _videoPlayer != player ||
+              playing == _isVideoPlaying) {
+            return;
+          }
+          setState(() {
+            _isVideoPlaying = playing;
+          });
+        });
+        _videoPlayer = player;
         _videoController = controller;
-        _isVideoPlaying = true;
+        _isVideoPlaying = player.state.playing;
       } catch (_) {
         _playbackNotice = '视频初始化失败，请检查文件格式或系统解码能力。';
-        await controller.dispose();
+        await player.dispose();
       }
     } else if (media.hasAudioPath) {
       final audioPath = media.audioPath!;
@@ -223,58 +248,45 @@ class _StagePageState extends State<StagePage> {
   }
 
   Future<void> _stopAndDisposePlaybackResources() async {
-    final oldVideoController = _videoController;
+    final oldVideoPlayer = _videoPlayer;
+    _videoPlayer = null;
     _videoController = null;
-    if (oldVideoController != null) {
-      oldVideoController.removeListener(_onVideoStateChanged);
-      await oldVideoController.pause();
-      await oldVideoController.dispose();
+    await _videoPlayingSubscription?.cancel();
+    _videoPlayingSubscription = null;
+    if (oldVideoPlayer != null) {
+      await oldVideoPlayer.stop();
+      await oldVideoPlayer.dispose();
     }
 
     _isVideoPlaying = false;
     await _audioPlayer.stop();
   }
 
-  void _onVideoStateChanged() {
-    final controller = _videoController;
-    if (controller == null) {
-      return;
-    }
-    final playing = controller.value.isPlaying;
-    if (playing == _isVideoPlaying) {
-      return;
-    }
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _isVideoPlaying = playing;
-    });
-  }
-
   Future<void> _toggleVideoPauseResume() async {
-    final controller = _videoController;
-    if (controller == null || !controller.value.isInitialized) {
+    final player = _videoPlayer;
+    if (player == null) {
       return;
     }
-    if (controller.value.isPlaying) {
-      await controller.pause();
+    if (player.state.playing) {
+      await player.pause();
     } else {
-      await controller.play();
+      await player.play();
     }
     if (!mounted) {
       return;
     }
     setState(() {
-      _isVideoPlaying = controller.value.isPlaying;
+      _isVideoPlaying = player.state.playing;
     });
   }
 
   Future<void> _toggleVideoLooping() async {
     final next = !_isVideoLooping;
-    final controller = _videoController;
-    if (controller != null && controller.value.isInitialized) {
-      await controller.setLooping(next);
+    final player = _videoPlayer;
+    if (player != null) {
+      await player.setPlaylistMode(
+        next ? PlaylistMode.single : PlaylistMode.none,
+      );
     }
     if (!mounted) {
       return;
@@ -421,27 +433,16 @@ class _StagePageState extends State<StagePage> {
     }
 
     final controller = _videoController;
-    if (controller == null || !controller.value.isInitialized) {
+    if (controller == null) {
       if (_playbackNotice != null) {
         return _StageEmpty(title: '视频不可播放', subtitle: _playbackNotice!);
       }
       return const Center(child: CircularProgressIndicator());
     }
 
-    final size = controller.value.size;
     return ColoredBox(
       color: Colors.black,
-      child: Center(
-        child: FittedBox(
-          fit: BoxFit.cover,
-          clipBehavior: Clip.hardEdge,
-          child: SizedBox(
-            width: size.width,
-            height: size.height,
-            child: VideoPlayer(controller),
-          ),
-        ),
-      ),
+      child: Video(controller: controller, fit: BoxFit.cover),
     );
   }
 

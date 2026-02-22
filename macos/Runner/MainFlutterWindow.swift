@@ -5,10 +5,12 @@ import desktop_multi_window
 import file_picker
 import hotkey_manager_macos
 import just_audio
+import media_kit_libs_macos_video
+import media_kit_video
 import package_info_plus
 import screen_retriever_macos
 import shared_preferences_foundation
-import video_player_avfoundation
+import volume_controller
 import wakelock_plus
 import window_manager
 
@@ -43,8 +45,14 @@ class MainFlutterWindow: NSWindow {
       SharedPreferencesPlugin.register(
         with: controller.registrar(forPlugin: "SharedPreferencesPlugin")
       )
-      FVPVideoPlayerPlugin.register(
-        with: controller.registrar(forPlugin: "FVPVideoPlayerPlugin")
+      MediaKitLibsMacosVideoPlugin.register(
+        with: controller.registrar(forPlugin: "MediaKitLibsMacosVideoPlugin")
+      )
+      MediaKitVideoPlugin.register(
+        with: controller.registrar(forPlugin: "MediaKitVideoPlugin")
+      )
+      VolumeControllerPlugin.register(
+        with: controller.registrar(forPlugin: "VolumeControllerPlugin")
       )
       WakelockPlusMacosPlugin.register(
         with: controller.registrar(forPlugin: "WakelockPlusMacosPlugin")

@@ -1,8 +1,11 @@
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'app_i18n.dart';
 
 enum MediaType { image, video }
 
@@ -125,7 +128,7 @@ class MediaItem {
     if (hasArtist) {
       return artist!.trim();
     }
-    return '未填写';
+    return '';
   }
 
   String get typeLabel => type == MediaType.image ? 'Image' : 'Video';
@@ -235,7 +238,7 @@ class AppState extends ChangeNotifier {
   static const String _kDefaultPath = 'default_media_path';
   static const String _kDefaultType = 'default_media_type';
   static const String _kDefaultAudioPath = 'default_media_audio_path';
-  static const String _kQueueDefaultTitle = '节目';
+  static const String _kLocaleCode = 'locale_code';
   static const String _kManagedMediaBaseName = 'default_media';
   static const String _kManagedAudioBaseName = 'default_audio';
   static const String _kManagedDefaultsFolder = 'defaults';
@@ -279,6 +282,7 @@ class AppState extends ChangeNotifier {
   SharedPreferences? _prefs;
   MediaItem? _defaultBackground;
   MediaItem? _stageOverride;
+  Locale _locale = AppI18n.normalizeLocale(PlatformDispatcher.instance.locale);
 
   final List<MediaItem> _playQueue = <MediaItem>[];
   int _nextPlayIndex = 0;
@@ -307,6 +311,10 @@ class AppState extends ChangeNotifier {
 
   int get playSignalVersion => _playSignalVersion;
 
+  Locale get locale => _locale;
+
+  String get localeStorageCode => AppI18n.localeStorageCode(_locale);
+
   MediaItem? get nextQueueItem {
     if (_playQueue.isEmpty) {
       return null;
@@ -317,8 +325,20 @@ class AppState extends ChangeNotifier {
 
   Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
+    _readLocaleFromPrefs();
     await _readDefaultFromPrefs();
     notifyListeners();
+  }
+
+  Future<void> setLocale(Locale locale) async {
+    final normalized = AppI18n.normalizeLocale(locale);
+    if (_locale == normalized) {
+      return;
+    }
+    _locale = normalized;
+    notifyListeners();
+    final prefs = await _ensurePrefs();
+    await prefs.setString(_kLocaleCode, AppI18n.localeStorageCode(normalized));
   }
 
   bool setPlaybackTriggerKey(LetterTriggerKey key) {
@@ -562,6 +582,19 @@ class AppState extends ChangeNotifier {
     );
   }
 
+  void _readLocaleFromPrefs() {
+    final prefs = _prefs;
+    if (prefs == null) {
+      return;
+    }
+    final rawCode = prefs.getString(_kLocaleCode);
+    if (rawCode == null || rawCode.trim().isEmpty) {
+      _locale = AppI18n.normalizeLocale(PlatformDispatcher.instance.locale);
+      return;
+    }
+    _locale = AppI18n.localeFromStorageCode(rawCode);
+  }
+
   bool _isReadableFile(String path) {
     if (path.isEmpty) {
       return false;
@@ -698,8 +731,7 @@ class AppState extends ChangeNotifier {
   }
 
   String _resolveUniqueQueueTitle(String? preferredTitle, {int? excludeIndex}) {
-    final baseTitle =
-        _normalizedTextOrNull(preferredTitle) ?? _kQueueDefaultTitle;
+    final baseTitle = _normalizedTextOrNull(preferredTitle) ?? _queueBaseTitle();
     final usedTitles = <String>{};
     for (var i = 0; i < _playQueue.length; i++) {
       if (excludeIndex != null && i == excludeIndex) {
@@ -717,6 +749,10 @@ class AppState extends ChangeNotifier {
       suffix++;
     }
     return '$baseTitle$suffix';
+  }
+
+  String _queueBaseTitle() {
+    return _locale.languageCode == 'zh' ? '节目' : 'Program';
   }
 
   String? _normalizedTextOrNull(String? value) {

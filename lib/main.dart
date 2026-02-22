@@ -4,9 +4,11 @@ import 'dart:convert';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'app_i18n.dart';
 import 'app_state.dart';
 import 'control_page.dart';
 import 'playlist_manager_window.dart';
@@ -94,10 +96,12 @@ class _HomepartyAppState extends State<HomepartyApp> {
   final GlobalKey<ControlPageState> _controlPageKey =
       GlobalKey<ControlPageState>();
   bool _windowReady = false;
+  late Locale _locale;
 
   @override
   void initState() {
     super.initState();
+    _locale = widget.appState.locale;
     HardwareKeyboard.instance.addHandler(_onHardwareKeyEvent);
     DesktopMultiWindow.setMethodHandler(_onWindowMethodCall);
     unawaited(_waitForMainWindowReady());
@@ -112,7 +116,7 @@ class _HomepartyAppState extends State<HomepartyApp> {
 
   Future<dynamic> _onWindowMethodCall(MethodCall call, int fromWindowId) async {
     if (fromWindowId <= 0) {
-      return _buildWindowResponse(ok: false, error: '仅支持子窗口调用。');
+      return _buildWindowResponse(ok: false, error: _tr('childWindowOnly'));
     }
     switch (call.method) {
       case PlaylistWindowMethods.getSnapshot:
@@ -121,7 +125,7 @@ class _HomepartyAppState extends State<HomepartyApp> {
         final args = _toMap(call.arguments);
         final item = MediaItem.fromJson(args?[PlaylistWindowPayloadKeys.item]);
         if (item == null) {
-          return _buildWindowResponse(ok: false, error: '添加失败：节目数据无效。');
+          return _buildWindowResponse(ok: false, error: _tr('addInvalidProgramData'));
         }
         widget.appState.addQueueItem(item);
         return _buildWindowResponse(ok: true);
@@ -130,22 +134,22 @@ class _HomepartyAppState extends State<HomepartyApp> {
         final index = _toInt(args?[PlaylistWindowPayloadKeys.index]);
         final item = MediaItem.fromJson(args?[PlaylistWindowPayloadKeys.item]);
         if (index == null || item == null) {
-          return _buildWindowResponse(ok: false, error: '编辑失败：参数无效。');
+          return _buildWindowResponse(ok: false, error: _tr('editInvalidArgs'));
         }
         final updated = widget.appState.updateQueueItemAt(index, item);
         if (updated == null) {
-          return _buildWindowResponse(ok: false, error: '编辑失败：条目不存在。');
+          return _buildWindowResponse(ok: false, error: _tr('editItemMissing'));
         }
         return _buildWindowResponse(ok: true);
       case PlaylistWindowMethods.deleteItem:
         final args = _toMap(call.arguments);
         final index = _toInt(args?[PlaylistWindowPayloadKeys.index]);
         if (index == null) {
-          return _buildWindowResponse(ok: false, error: '删除失败：参数无效。');
+          return _buildWindowResponse(ok: false, error: _tr('deleteInvalidArgs'));
         }
         final removed = widget.appState.removeQueueItemAt(index);
         if (!removed) {
-          return _buildWindowResponse(ok: false, error: '删除失败：条目不存在。');
+          return _buildWindowResponse(ok: false, error: _tr('deleteItemMissing'));
         }
         return _buildWindowResponse(ok: true);
       case PlaylistWindowMethods.reorder:
@@ -153,7 +157,7 @@ class _HomepartyAppState extends State<HomepartyApp> {
         final oldIndex = _toInt(args?[PlaylistWindowPayloadKeys.oldIndex]);
         final newIndex = _toInt(args?[PlaylistWindowPayloadKeys.newIndex]);
         if (oldIndex == null || newIndex == null) {
-          return _buildWindowResponse(ok: false, error: '排序失败：参数无效。');
+          return _buildWindowResponse(ok: false, error: _tr('reorderInvalidArgs'));
         }
         widget.appState.reorderPlayQueue(oldIndex, newIndex);
         return _buildWindowResponse(ok: true);
@@ -161,7 +165,7 @@ class _HomepartyAppState extends State<HomepartyApp> {
         final args = _toMap(call.arguments);
         final rawQueue = args?[PlaylistWindowPayloadKeys.queue];
         if (rawQueue is! List) {
-          return _buildWindowResponse(ok: false, error: '导入失败：参数无效。');
+          return _buildWindowResponse(ok: false, error: _tr('importInvalidArgs'));
         }
         final queueItems = <MediaItem>[];
         for (final rawItem in rawQueue) {
@@ -173,7 +177,10 @@ class _HomepartyAppState extends State<HomepartyApp> {
         widget.appState.replacePlayQueue(queueItems);
         return _buildWindowResponse(ok: true);
     }
-    return _buildWindowResponse(ok: false, error: '未知操作：${call.method}');
+    return _buildWindowResponse(
+      ok: false,
+      error: _tr('unknownAction', <String, Object?>{'method': call.method}),
+    );
   }
 
   Map<String, dynamic> _buildWindowResponse({required bool ok, String? error}) {
@@ -212,6 +219,23 @@ class _HomepartyAppState extends State<HomepartyApp> {
     _windowReady = true;
   }
 
+  String _tr(
+    String key, [
+    Map<String, Object?> params = const <String, Object?>{},
+  ]) {
+    return AppI18n.tr(_locale, key, params);
+  }
+
+  Future<void> _onLocaleChanged(Locale nextLocale) async {
+    final normalized = AppI18n.normalizeLocale(nextLocale);
+    if (_locale != normalized && mounted) {
+      setState(() {
+        _locale = normalized;
+      });
+    }
+    await widget.appState.setLocale(normalized);
+  }
+
   bool _onHardwareKeyEvent(KeyEvent event) {
     if (!_windowReady) {
       return false;
@@ -231,7 +255,7 @@ class _HomepartyAppState extends State<HomepartyApp> {
     if (triggerKey == widget.appState.resetTriggerKey) {
       final result = widget.appState.resetToDefaultBackground();
       if (result == ResetToDefaultResult.defaultNotSet) {
-        _controlPageKey.currentState?.showLightweightTip('请先设置默认背景。');
+        _controlPageKey.currentState?.showLightweightTip(_tr('setDefaultFirst'));
       }
       return true;
     }
@@ -239,7 +263,9 @@ class _HomepartyAppState extends State<HomepartyApp> {
     if (triggerKey == widget.appState.playbackTriggerKey) {
       final result = widget.appState.startAndPlayNext();
       if (result == StartPlaybackResult.queueEmpty) {
-        _controlPageKey.currentState?.showLightweightTip('播放列表为空，请先添加节目。');
+        _controlPageKey.currentState?.showLightweightTip(
+          _tr('queueEmptyAddFirst'),
+        );
       }
       return true;
     }
@@ -258,15 +284,28 @@ class _HomepartyAppState extends State<HomepartyApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'HomeParty Control',
+      title: _tr('homepartyControlTitle'),
       debugShowCheckedModeBanner: false,
+      locale: _locale,
+      supportedLocales: AppI18n.supportedLocales,
+      localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+        AppI18n.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       theme: ThemeData(
         brightness: Brightness.dark,
         colorSchemeSeed: Colors.teal,
         scaffoldBackgroundColor: const Color(0xFF101010),
         useMaterial3: true,
       ),
-      home: ControlPage(key: _controlPageKey, appState: widget.appState),
+      home: ControlPage(
+        key: _controlPageKey,
+        appState: widget.appState,
+        locale: _locale,
+        onLocaleChanged: _onLocaleChanged,
+      ),
     );
   }
 }

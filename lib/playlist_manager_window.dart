@@ -6,10 +6,12 @@ import 'dart:ui' as ui;
 import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'app_i18n.dart';
 import 'app_state.dart';
 import 'playlist_window_protocol.dart';
 
@@ -26,9 +28,21 @@ class PlaylistManagerWindowApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hostWindowId = _toInt(arguments['hostWindowId']) ?? 0;
+    final rawLocaleCode = arguments['locale']?.toString();
+    final locale = rawLocaleCode == null || rawLocaleCode.trim().isEmpty
+        ? AppI18n.normalizeLocale(WidgetsBinding.instance.platformDispatcher.locale)
+        : AppI18n.localeFromStorageCode(rawLocaleCode);
     return MaterialApp(
-      title: '播放列表管理',
+      title: AppI18n.tr(locale, 'playlistManagerTitle'),
       debugShowCheckedModeBanner: false,
+      locale: locale,
+      supportedLocales: AppI18n.supportedLocales,
+      localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+        AppI18n.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       theme: ThemeData(
         brightness: Brightness.dark,
         colorSchemeSeed: Colors.teal,
@@ -38,6 +52,7 @@ class PlaylistManagerWindowApp extends StatelessWidget {
       home: PlaylistManagerWindow(
         windowController: WindowController.fromWindowId(windowId),
         hostWindowId: hostWindowId,
+        locale: locale,
       ),
     );
   }
@@ -61,10 +76,12 @@ class PlaylistManagerWindow extends StatefulWidget {
     super.key,
     required this.windowController,
     required this.hostWindowId,
+    required this.locale,
   });
 
   final WindowController windowController;
   final int hostWindowId;
+  final Locale locale;
 
   @override
   State<PlaylistManagerWindow> createState() => _PlaylistManagerWindowState();
@@ -82,6 +99,13 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
   int? _currentQueueIndex;
   int _nextPlayIndex = 0;
   bool _playbackReady = false;
+
+  String _tr(
+    String key, [
+    Map<String, Object?> params = const <String, Object?>{},
+  ]) {
+    return AppI18n.tr(widget.locale, key, params);
+  }
 
   @override
   void initState() {
@@ -104,9 +128,10 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
 
   Future<void> _configureWindow() async {
     await windowManager.ensureInitialized();
+    final windowTitle = _tr('stagePlaylistManagerTitle');
     await windowManager.waitUntilReadyToShow(
-      const WindowOptions(
-        title: '舞台播放列表管理',
+      WindowOptions(
+        title: windowTitle,
         minimumSize: Size(520, 620),
         size: Size(560, 760),
         center: true,
@@ -149,7 +174,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
     } catch (error) {
       if (mounted) {
         setState(() {
-          _errorText = '读取播放列表失败：$error';
+          _errorText = _tr('readPlaylistFailed', <String, Object?>{'error': '$error'});
         });
       }
     } finally {
@@ -169,9 +194,9 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
     final input = await showDialog<_PlayableInput>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const _AddOrEditPlayableDialog(
-        dialogTitle: '添加节目',
-        submitText: '添加并保存',
+      builder: (context) => _AddOrEditPlayableDialog(
+        dialogTitle: _tr('addProgramDialogTitle'),
+        submitText: _tr('addAndSave'),
       ),
     );
     if (input == null) {
@@ -179,7 +204,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
     }
     final item = _createItemFromInput(input);
     if (item == null) {
-      _showSnackBar('添加失败：文件类型与选择的播放类型不匹配。');
+      _showSnackBar(_tr('addFailedTypeMismatch'));
       return;
     }
     final validationError = await _validatePlayable(item);
@@ -201,8 +226,8 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
       context: context,
       barrierDismissible: false,
       builder: (context) => _AddOrEditPlayableDialog(
-        dialogTitle: '编辑节目',
-        submitText: '保存修改',
+        dialogTitle: _tr('editProgramDialogTitle'),
+        submitText: _tr('saveChanges'),
         initialValue: _PlayableInput(
           type: current.type,
           mediaPath: current.path,
@@ -217,7 +242,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
     }
     final item = _createItemFromInput(input);
     if (item == null) {
-      _showSnackBar('编辑失败：文件类型与选择的播放类型不匹配。');
+      _showSnackBar(_tr('editFailedTypeMismatch'));
       return;
     }
     final validationError = await _validatePlayable(item);
@@ -255,7 +280,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
       return;
     }
     if (_queue.isEmpty) {
-      _showSnackBar('播放列表为空，无法导出。');
+      _showSnackBar(_tr('queueEmptyCannotExport'));
       return;
     }
     if (mounted) {
@@ -267,7 +292,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
       final suggestedName =
           'playlist_${DateTime.now().toIso8601String().replaceAll(':', '-')}.json';
       var savePath = await FilePicker.platform.saveFile(
-        dialogTitle: '导出播放列表',
+        dialogTitle: _tr('exportPlaylistDialogTitle'),
         fileName: suggestedName,
         type: FileType.custom,
         allowedExtensions: const <String>['json'],
@@ -282,9 +307,9 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
       final payload = AppState.buildPlaylistFilePayload(_queue);
       final text = const JsonEncoder.withIndent('  ').convert(payload);
       await File(savePath).writeAsString('$text\n');
-      _showSnackBar('导出成功：$savePath');
+      _showSnackBar(_tr('exportSuccess', <String, Object?>{'path': savePath}));
     } catch (error) {
-      _showSnackBar('导出失败：$error');
+      _showSnackBar(_tr('exportFailed', <String, Object?>{'error': '$error'}));
     } finally {
       if (mounted) {
         setState(() {
@@ -299,7 +324,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
       return;
     }
     final result = await FilePicker.platform.pickFiles(
-      dialogTitle: '导入播放列表',
+      dialogTitle: _tr('importPlaylistDialogTitle'),
       type: FileType.custom,
       allowMultiple: false,
       withData: false,
@@ -310,7 +335,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
     }
     final importPath = result.files.single.path;
     if (importPath == null || importPath.isEmpty) {
-      _showSnackBar('读取文件路径失败。');
+      _showSnackBar(_tr('readFilePathFailed'));
       return;
     }
     if (!mounted) {
@@ -326,25 +351,26 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
       final decoded = jsonDecode(rawText);
       final importedItems = AppState.parsePlaylistFilePayload(decoded);
       if (importedItems == null) {
-        _showSnackBar('导入失败：文件格式无效。');
+        _showSnackBar(_tr('importInvalidFormat'));
         return;
       }
       if (importedItems.isEmpty) {
-        _showSnackBar('导入失败：文件中没有可用条目。');
+        _showSnackBar(_tr('importNoItems'));
         return;
       }
       var inaccessiblePaths = _collectInaccessiblePaths(importedItems);
       if (inaccessiblePaths.isNotEmpty) {
         final granted = await _requestImportFileAccess(inaccessiblePaths);
         if (!granted) {
-          _showSnackBar('导入已取消：未完成媒体文件访问授权。');
+          _showSnackBar(_tr('importCancelledNoAccess'));
           return;
         }
         inaccessiblePaths = _collectInaccessiblePaths(importedItems);
         if (inaccessiblePaths.isNotEmpty) {
-          _showSnackBar(
-            '导入失败：仍有 ${inaccessiblePaths.length} 个文件未授权，请在授权窗口中多选这些媒体文件。',
-          );
+          _showSnackBar(_tr(
+            'importStillUnauthorized',
+            <String, Object?>{'count': inaccessiblePaths.length},
+          ));
           return;
         }
       }
@@ -356,9 +382,11 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
               .toList(),
         },
       );
-      _showSnackBar('导入完成，共 ${importedItems.length} 条。');
+      _showSnackBar(
+        _tr('importCompleted', <String, Object?>{'count': importedItems.length}),
+      );
     } catch (error) {
-      _showSnackBar('导入失败：$error');
+      _showSnackBar(_tr('importFailed', <String, Object?>{'error': '$error'}));
     } finally {
       if (mounted) {
         setState(() {
@@ -388,27 +416,34 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
     if (!mounted || inaccessiblePaths.isEmpty) {
       return inaccessiblePaths.isEmpty;
     }
+    final l10n = context.l10n;
     final sampleNames = inaccessiblePaths
         .take(3)
         .map(_fileNameFromPath)
-        .join('、');
-    final suffix = inaccessiblePaths.length > 3 ? ' 等文件' : '';
+        .join(l10n.locale.languageCode == 'zh' ? '、' : ', ');
+    final suffix = inaccessiblePaths.length > 3
+        ? (l10n.locale.languageCode == 'zh' ? ' 等文件' : ' and more files')
+        : '';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('需要系统文件权限'),
+          title: Text(_tr('fileAccessRequiredTitle')),
           content: Text(
-            '导入列表引用了 ${inaccessiblePaths.length} 个未授权文件（如：$sampleNames$suffix）。\n\n点击“去授权”后，请在系统窗口中按住 Command 多选这些媒体文件。',
+            _tr('importUnauthorizedFilesDialog', <String, Object?>{
+              'count': inaccessiblePaths.length,
+              'sampleNames': sampleNames,
+              'suffix': suffix,
+            }),
           ),
           actions: <Widget>[
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('取消'),
+              child: Text(_tr('cancel')),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('去授权'),
+              child: Text(_tr('authorize')),
             ),
           ],
         );
@@ -418,7 +453,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
       return false;
     }
     final picked = await FilePicker.platform.pickFiles(
-      dialogTitle: '为导入播放列表授权媒体文件（可多选）',
+      dialogTitle: _tr('authorizeImportDialogTitle'),
       type: FileType.custom,
       allowMultiple: true,
       withData: false,
@@ -497,7 +532,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
         _showSnackBar(parsed.error!);
       }
     } catch (error) {
-      _showSnackBar('操作失败：$error');
+      _showSnackBar(_tr('operationFailed', <String, Object?>{'error': '$error'}));
     } finally {
       if (mounted) {
         setState(() {
@@ -511,7 +546,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
     if (raw is! Map) {
       return _HostResponse(
         ok: false,
-        error: '主窗口返回了无效数据。',
+        error: _tr('invalidHostResponse'),
         snapshot: _buildCurrentSnapshot(),
       );
     }
@@ -589,17 +624,17 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
 
   Future<String?> _validatePlayable(MediaItem item) async {
     if (!File(item.path).existsSync()) {
-      return '媒体文件不存在，已拒绝保存。';
+      return _tr('mediaMissingRejectSave');
     }
     if (item.type == MediaType.video) {
       return _validateVideo(item.path);
     }
     if (!item.hasAudioPath) {
-      return '图片类型必须提供伴奏音乐。';
+      return _tr('imageNeedsAudioRejectSave');
     }
     final audioPath = item.audioPath!;
     if (!File(audioPath).existsSync()) {
-      return '伴奏文件不存在，已拒绝保存。';
+      return _tr('audioMissingRejectSave');
     }
     final imageError = await _validateImage(item.path);
     if (imageError != null) {
@@ -612,14 +647,14 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
     try {
       final bytes = await File(path).readAsBytes();
       if (bytes.isEmpty) {
-        return '图片文件为空，已拒绝保存。';
+        return _tr('imageEmptyRejectSave');
       }
       final codec = await ui.instantiateImageCodec(bytes);
       final frame = await codec.getNextFrame();
       frame.image.dispose();
       return null;
     } catch (_) {
-      return '图片无法解码，已拒绝保存。';
+      return _tr('imageDecodeRejectSave');
     }
   }
 
@@ -630,7 +665,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
       await player.stop();
       return null;
     } catch (_) {
-      return '伴奏文件无法播放，已拒绝保存。';
+      return _tr('audioDecodeRejectSave');
     } finally {
       await player.dispose();
     }
@@ -643,7 +678,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
       await player.stop();
       return null;
     } catch (_) {
-      return '视频初始化失败，已拒绝保存。';
+      return _tr('videoInitRejectSave');
     } finally {
       await player.dispose();
     }
@@ -658,6 +693,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final hasQueue = _queue.isNotEmpty;
     final safeNextIndex = hasQueue ? _nextPlayIndex % _queue.length : null;
     final safeCurrentIndex = hasQueue && _currentQueueIndex != null
@@ -665,32 +701,32 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
         : null;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('舞台播放列表管理'),
+        title: Text(l10n.t('stagePlaylistManagerTitle')),
         actions: <Widget>[
           IconButton(
             onPressed: _submitting || _playlistFileBusy
                 ? null
                 : _importPlaylist,
-            tooltip: '导入',
+            tooltip: l10n.t('importTooltip'),
             icon: const Icon(Icons.upload_file),
           ),
           IconButton(
             onPressed: _submitting || _playlistFileBusy
                 ? null
                 : _exportPlaylist,
-            tooltip: '导出',
+            tooltip: l10n.t('exportTooltip'),
             icon: const Icon(Icons.download),
           ),
           IconButton(
             onPressed: _submitting || _playlistFileBusy
                 ? null
                 : () => _refreshSnapshot(showLoading: true),
-            tooltip: '刷新',
+            tooltip: l10n.t('refreshTooltip'),
             icon: const Icon(Icons.refresh),
           ),
           IconButton(
             onPressed: () => widget.windowController.close(),
-            tooltip: '关闭',
+            tooltip: l10n.t('closeTooltip'),
             icon: const Icon(Icons.close),
           ),
         ],
@@ -698,7 +734,11 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _submitting || _playlistFileBusy ? null : _addPlayableItem,
         icon: const Icon(Icons.add),
-        label: Text(_submitting || _playlistFileBusy ? '处理中...' : '添加节目'),
+        label: Text(
+          _submitting || _playlistFileBusy
+              ? l10n.t('processing')
+              : l10n.t('addProgram'),
+        ),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
@@ -717,7 +757,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
             ),
             const SizedBox(height: 12),
             Text(
-              '节目列表（按序号显示，支持拖动排序、编辑、删除）',
+              l10n.t('playlistListHint'),
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
@@ -786,9 +826,10 @@ class _QueueStatusCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final readyText = playbackReady ? '准备播放' : '未开始';
-    final currentText = currentOrder == null ? '无' : '$currentOrder';
-    final nextText = nextOrder == null ? '无' : '$nextOrder';
+    final l10n = context.l10n;
+    final readyText = playbackReady ? l10n.t('readyToPlay') : l10n.t('notStarted');
+    final currentText = currentOrder == null ? l10n.t('none') : '$currentOrder';
+    final nextText = nextOrder == null ? l10n.t('none') : '$nextOrder';
     return DecoratedBox(
       decoration: BoxDecoration(
         color: const Color(0xFF171B1B),
@@ -800,16 +841,16 @@ class _QueueStatusCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text('播放列表条目：$queueLength'),
+            Text(l10n.t('queueEntryCount', <String, Object?>{'count': queueLength})),
             const SizedBox(height: 4),
-            Text('播放状态：$readyText'),
+            Text(l10n.t('playbackStatus', <String, Object?>{'status': readyText})),
             const SizedBox(height: 4),
-            Text('当前序号：$currentText'),
+            Text(l10n.t('currentOrder', <String, Object?>{'order': currentText})),
             const SizedBox(height: 2),
-            Text('下一序号：$nextText'),
+            Text(l10n.t('nextOrder', <String, Object?>{'order': nextText})),
             if (loading) ...<Widget>[
               const SizedBox(height: 6),
-              const Text('同步中...'),
+              Text(l10n.t('syncing')),
             ],
             if (errorText != null) ...<Widget>[
               const SizedBox(height: 6),
@@ -842,6 +883,7 @@ class _QueueItemTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final tileColor = isCurrent
         ? const Color(0xFF215236)
         : isNext
@@ -864,12 +906,12 @@ class _QueueItemTile extends StatelessWidget {
             IconButton(
               onPressed: onEdit,
               icon: const Icon(Icons.edit_outlined),
-              tooltip: '编辑',
+              tooltip: l10n.t('edit'),
             ),
             IconButton(
               onPressed: onDelete,
               icon: const Icon(Icons.delete_outline),
-              tooltip: '删除',
+              tooltip: l10n.t('delete'),
             ),
             ReorderableDragStartListener(
               index: index,
@@ -887,14 +929,15 @@ class _EmptyQueueHint extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     return DecoratedBox(
       decoration: BoxDecoration(
         color: const Color(0xFF141414),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: const Color(0xFF262626)),
       ),
-      child: const Center(
-        child: Text('播放列表为空，点击右下角“添加节目”。', textAlign: TextAlign.center),
+      child: Center(
+        child: Text(l10n.t('emptyQueueHintManager'), textAlign: TextAlign.center),
       ),
     );
   }
@@ -963,8 +1006,9 @@ class _AddOrEditPlayableDialogState extends State<_AddOrEditPlayableDialog> {
   }
 
   Future<void> _pickImage() async {
+    final l10n = context.l10n;
     final path = await _pickFile(
-      title: '选择图片',
+      title: l10n.t('pickImage'),
       extensions: AppState.imageExtensions,
     );
     if (path == null) {
@@ -976,8 +1020,9 @@ class _AddOrEditPlayableDialogState extends State<_AddOrEditPlayableDialog> {
   }
 
   Future<void> _pickVideo() async {
+    final l10n = context.l10n;
     final path = await _pickFile(
-      title: '选择视频',
+      title: l10n.t('pickVideo'),
       extensions: AppState.videoExtensions,
     );
     if (path == null) {
@@ -989,8 +1034,9 @@ class _AddOrEditPlayableDialogState extends State<_AddOrEditPlayableDialog> {
   }
 
   Future<void> _pickAudio() async {
+    final l10n = context.l10n;
     final path = await _pickFile(
-      title: '选择伴奏音乐',
+      title: l10n.t('pickAudio'),
       extensions: AppState.audioExtensions,
     );
     if (path == null) {
@@ -1034,6 +1080,7 @@ class _AddOrEditPlayableDialogState extends State<_AddOrEditPlayableDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     return AlertDialog(
       title: Text(widget.dialogTitle),
       content: SizedBox(
@@ -1044,14 +1091,14 @@ class _AddOrEditPlayableDialogState extends State<_AddOrEditPlayableDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               SegmentedButton<MediaType>(
-                segments: const <ButtonSegment<MediaType>>[
+                segments: <ButtonSegment<MediaType>>[
                   ButtonSegment<MediaType>(
                     value: MediaType.image,
-                    label: Text('图片'),
+                    label: Text(l10n.t('imageOption')),
                   ),
                   ButtonSegment<MediaType>(
                     value: MediaType.video,
-                    label: Text('视频'),
+                    label: Text(l10n.t('videoOption')),
                   ),
                 ],
                 selected: <MediaType>{_selectedType},
@@ -1066,49 +1113,55 @@ class _AddOrEditPlayableDialogState extends State<_AddOrEditPlayableDialog> {
                 FilledButton.tonalIcon(
                   onPressed: _pickImage,
                   icon: const Icon(Icons.image),
-                  label: const Text('选择图片（必选）'),
+                  label: Text(l10n.t('selectImageRequired')),
                 ),
                 if (_imagePath != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
-                    child: Text('图片：$_imagePath'),
+                    child: Text(
+                      l10n.t('imagePath', <String, Object?>{'path': _imagePath}),
+                    ),
                   ),
                 const SizedBox(height: 8),
                 FilledButton.tonalIcon(
                   onPressed: _pickAudio,
                   icon: const Icon(Icons.music_note),
-                  label: const Text('选择音乐（必选）'),
+                  label: Text(l10n.t('selectAudioRequired')),
                 ),
                 if (_audioPath != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
-                    child: Text('音乐：$_audioPath'),
+                    child: Text(
+                      l10n.t('audioPath', <String, Object?>{'path': _audioPath}),
+                    ),
                   ),
               ] else ...<Widget>[
                 FilledButton.tonalIcon(
                   onPressed: _pickVideo,
                   icon: const Icon(Icons.movie),
-                  label: const Text('选择视频（必选）'),
+                  label: Text(l10n.t('selectVideoRequired')),
                 ),
                 if (_videoPath != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
-                    child: Text('视频：$_videoPath'),
+                    child: Text(
+                      l10n.t('videoPath', <String, Object?>{'path': _videoPath}),
+                    ),
                   ),
               ],
               const SizedBox(height: 12),
               TextField(
                 controller: _titleController,
-                decoration: const InputDecoration(
-                  labelText: '节目标题（可选，留空自动生成）',
+                decoration: InputDecoration(
+                  labelText: l10n.t('programTitleOptional'),
                   border: OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: _artistController,
-                decoration: const InputDecoration(
-                  labelText: '演唱者（可选）',
+                decoration: InputDecoration(
+                  labelText: l10n.t('artistOptional'),
                   border: OutlineInputBorder(),
                 ),
               ),
@@ -1119,7 +1172,7 @@ class _AddOrEditPlayableDialogState extends State<_AddOrEditPlayableDialog> {
       actions: <Widget>[
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
+          child: Text(l10n.t('cancel')),
         ),
         FilledButton(
           onPressed: _canSubmit

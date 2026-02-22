@@ -11,6 +11,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'app_i18n.dart';
 import 'app_state.dart';
 
 class StagePage extends StatefulWidget {
@@ -46,6 +47,13 @@ class _StagePageState extends State<StagePage> {
   int _autoResetHandledToken = -1;
   Timer? _overlayHideTimer;
   bool _overlayVisible = true;
+
+  String _artistOrFallback(MediaItem? item, AppI18n l10n) {
+    if (item != null && item.hasArtist) {
+      return item.artist!.trim();
+    }
+    return l10n.t('notFilled');
+  }
 
   @override
   void initState() {
@@ -113,10 +121,12 @@ class _StagePageState extends State<StagePage> {
     if (_playlistManagerWindowController != null) {
       return;
     }
+    final locale = widget.appState.locale;
     final newWindow = await DesktopMultiWindow.createWindow(
       jsonEncode(<String, dynamic>{
         'kind': 'playlist_manager',
         'hostWindowId': 0,
+        'locale': widget.appState.localeStorageCode,
       }),
     );
     if (!mounted) {
@@ -126,7 +136,7 @@ class _StagePageState extends State<StagePage> {
     _playlistManagerWindowController = newWindow;
     await newWindow.setFrame(const Rect.fromLTWH(100, 120, 560, 760));
     await newWindow.center();
-    await newWindow.setTitle('舞台播放列表管理');
+    await newWindow.setTitle(AppI18n.tr(locale, 'stagePlaylistManagerTitle'));
     await newWindow.show();
   }
 
@@ -266,7 +276,10 @@ class _StagePageState extends State<StagePage> {
           ),
         );
       } catch (_) {
-        _playbackNotice = '视频初始化失败，请检查文件格式或系统解码能力。';
+        _playbackNotice = AppI18n.tr(
+          widget.appState.locale,
+          'videoInitCheckFormat',
+        );
         await player.dispose();
       }
     } else if (media.hasAudioPath) {
@@ -287,7 +300,7 @@ class _StagePageState extends State<StagePage> {
         await _audioPlayer.setLoopMode(ja.LoopMode.off);
         await _audioPlayer.play();
       } catch (_) {
-        _playbackNotice = '伴奏播放失败，当前已静音。';
+        _playbackNotice = AppI18n.tr(widget.appState.locale, 'audioPlaybackMuted');
         await _audioPlayerStateSubscription?.cancel();
         _audioPlayerStateSubscription = null;
         await _audioPlayer.stop();
@@ -333,7 +346,10 @@ class _StagePageState extends State<StagePage> {
     final result = widget.appState.resetToDefaultBackground();
     if (result == ResetToDefaultResult.defaultNotSet && mounted) {
       setState(() {
-        _playbackNotice = '节目播放结束，但尚未设置默认背景。';
+        _playbackNotice = AppI18n.tr(
+          widget.appState.locale,
+          'programEndedNoDefault',
+        );
       });
     }
   }
@@ -360,7 +376,10 @@ class _StagePageState extends State<StagePage> {
         return;
       }
       setState(() {
-        _playbackNotice = '检测到视频画面未输出，正在切换兼容模式...';
+        _playbackNotice = AppI18n.tr(
+          widget.appState.locale,
+          'videoFallbackSwitching',
+        );
       });
       final retryToken = ++_syncToken;
       await _switchPlaybackForMedia(
@@ -395,7 +414,7 @@ class _StagePageState extends State<StagePage> {
     if (result == ResetToDefaultResult.defaultNotSet) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('请先设置默认背景。')));
+      ).showSnackBar(SnackBar(content: Text(context.l10n.t('setDefaultFirst'))));
     }
   }
 
@@ -431,6 +450,7 @@ class _StagePageState extends State<StagePage> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final media = widget.appState.currentStageMedia;
     final isVideo = media?.type == MediaType.video;
     return Focus(
@@ -461,23 +481,27 @@ class _StagePageState extends State<StagePage> {
                       children: <Widget>[
                         FilledButton.tonal(
                           onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('返回控制台'),
+                          child: Text(l10n.t('backToControl')),
                         ),
                         FilledButton.tonal(
                           onPressed: () => _setFullscreen(!_isFullscreen),
                           child: Text(
-                            _isFullscreen ? '退出全屏(Esc)' : '进入全屏(F11)',
+                            _isFullscreen
+                                ? l10n.t('exitFullscreenEsc')
+                                : l10n.t('enterFullscreenF11'),
                           ),
                         ),
                         FilledButton.tonal(
                           onPressed: _switchToDefaultBackground,
-                          child: const Text('切回默认背景'),
+                          child: Text(l10n.t('switchToDefaultBackground')),
                         ),
                         if (isVideo) ...<Widget>[
                           FilledButton.tonal(
                             onPressed: _toggleVideoPauseResume,
                             child: Text(
-                              _isVideoPlaying ? '暂停(Space)' : '继续(Space)',
+                              _isVideoPlaying
+                                  ? l10n.t('pauseSpace')
+                                  : l10n.t('resumeSpace'),
                             ),
                           ),
                         ],
@@ -500,15 +524,16 @@ class _StagePageState extends State<StagePage> {
   }
 
   Widget _buildStageContent(MediaItem? media) {
+    final l10n = context.l10n;
     if (media == null) {
-      return const _StageEmpty(
-        title: 'No background configured',
-        subtitle: 'Set a default media in ControlPage first.',
+      return _StageEmpty(
+        title: l10n.t('noBackgroundConfigured'),
+        subtitle: l10n.t('setDefaultInControlFirst'),
       );
     }
 
     if (!media.existsOnDisk) {
-      return _StageEmpty(title: 'File not found', subtitle: media.path);
+      return _StageEmpty(title: l10n.t('fileNotFound'), subtitle: media.path);
     }
 
     if (media.type == MediaType.image) {
@@ -516,7 +541,7 @@ class _StagePageState extends State<StagePage> {
         File(media.path),
         fit: BoxFit.cover,
         errorBuilder: (_, error, stackTrace) {
-          return _StageEmpty(title: 'Cannot open image', subtitle: media.path);
+          return _StageEmpty(title: l10n.t('cannotOpenImage'), subtitle: media.path);
         },
       );
     }
@@ -524,7 +549,7 @@ class _StagePageState extends State<StagePage> {
     final controller = _videoController;
     if (controller == null) {
       if (_playbackNotice != null) {
-        return _StageEmpty(title: '视频不可播放', subtitle: _playbackNotice!);
+        return _StageEmpty(title: l10n.t('videoUnavailable'), subtitle: _playbackNotice!);
       }
       return const Center(child: CircularProgressIndicator());
     }
@@ -540,20 +565,25 @@ class _StagePageState extends State<StagePage> {
   }
 
   Widget _buildMediaInfo(MediaItem? media) {
-    final currentTitle = media?.displayTitle ?? '无';
-    final currentArtist = media?.displayArtist ?? '未填写';
+    final l10n = context.l10n;
+    final currentTitle = media?.displayTitle ?? l10n.t('none');
+    final currentArtist = _artistOrFallback(media, l10n);
     final nextItem = widget.appState.nextQueueItem;
-    final nextTitle = nextItem?.displayTitle ?? '无';
-    final nextArtist = nextItem?.displayArtist ?? '未填写';
+    final nextTitle = nextItem?.displayTitle ?? l10n.t('none');
+    final nextArtist = _artistOrFallback(nextItem, l10n);
     final playbackMeta = media == null
-        ? '等待控制台发送节目。'
+        ? l10n.t('waitingForProgram')
         : media.type == MediaType.image
         ? media.hasAudioPath
-              ? '类型：图片 | 伴奏：${media.audioPath} | 伴奏结束后自动切回默认背景'
-              : '类型：图片 | 伴奏：静音'
-        : '类型：视频 | Space：暂停/继续 | 结束后自动切回默认背景';
-    final keyTips =
-        '热键：下一项(${widget.appState.playbackTriggerKey.label}) | 切回默认(${widget.appState.resetTriggerKey.label})';
+              ? l10n.t('mediaTypeImageWithAudioAutoReset', <String, Object?>{
+                  'audioPath': media.audioPath ?? '',
+                })
+              : l10n.t('mediaTypeImageMuted')
+        : l10n.t('mediaTypeVideoAutoReset');
+    final keyTips = l10n.t('hotkeysHint', <String, Object?>{
+      'playKey': widget.appState.playbackTriggerKey.label,
+      'resetKey': widget.appState.resetTriggerKey.label,
+    });
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -589,7 +619,7 @@ class _StagePageState extends State<StagePage> {
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 Text(
-                  '当前节目：$currentTitle',
+                  l10n.t('currentProgram', <String, Object?>{'title': currentTitle}),
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w700,
@@ -597,17 +627,20 @@ class _StagePageState extends State<StagePage> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '当前演唱者：$currentArtist',
+                  l10n.t(
+                    'currentArtist',
+                    <String, Object?>{'artist': currentArtist},
+                  ),
                   style: const TextStyle(color: Colors.white70),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '下一节目：$nextTitle',
+                  l10n.t('nextProgram', <String, Object?>{'title': nextTitle}),
                   style: const TextStyle(color: Colors.white70),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '下一演唱者：$nextArtist',
+                  l10n.t('nextArtist', <String, Object?>{'artist': nextArtist}),
                   style: const TextStyle(color: Colors.white70),
                 ),
                 const SizedBox(height: 2),

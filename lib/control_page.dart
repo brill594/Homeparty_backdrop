@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -22,6 +23,7 @@ class ControlPageState extends State<ControlPage> {
   String? _pendingTip;
   bool _tipFlushScheduled = false;
   bool _addingItem = false;
+  bool _playlistFileBusy = false;
 
   Future<void> _setDefaultBackground() async {
     final path = await _pickMediaPath(dialogTitle: '选择默认背景（图片或视频）');
@@ -40,8 +42,12 @@ class ControlPageState extends State<ControlPage> {
       return;
     }
 
-    await widget.appState.setDefaultBackground(item);
-    _showSnackBar('默认背景已设置：${item.fileName}');
+    try {
+      await widget.appState.setDefaultBackground(item);
+      _showSnackBar('默认背景已设置：${item.fileName}');
+    } catch (error) {
+      _showSnackBar('设置默认背景失败：$error');
+    }
   }
 
   Future<void> _addPlayableItem() async {
@@ -265,6 +271,204 @@ class ControlPageState extends State<ControlPage> {
     widget.appState.reorderPlayQueue(oldIndex, newIndex);
   }
 
+  Future<void> _exportPlaylist() async {
+    if (_playlistFileBusy) {
+      return;
+    }
+    if (widget.appState.playQueue.isEmpty) {
+      _showSnackBar('播放列表为空，无法导出。');
+      return;
+    }
+    setState(() {
+      _playlistFileBusy = true;
+    });
+    try {
+      final suggestedName =
+          'playlist_${DateTime.now().toIso8601String().replaceAll(':', '-')}.json';
+      var savePath = await FilePicker.platform.saveFile(
+        dialogTitle: '导出播放列表',
+        fileName: suggestedName,
+        type: FileType.custom,
+        allowedExtensions: const <String>['json'],
+      );
+      if (savePath == null || savePath.trim().isEmpty) {
+        return;
+      }
+      savePath = savePath.trim();
+      if (!savePath.toLowerCase().endsWith('.json')) {
+        savePath = '$savePath.json';
+      }
+      final exportPayload = AppState.buildPlaylistFilePayload(
+        widget.appState.playQueue,
+      );
+      final jsonText = const JsonEncoder.withIndent(
+        '  ',
+      ).convert(exportPayload);
+      await File(savePath).writeAsString('$jsonText\n');
+      _showSnackBar('导出成功：$savePath');
+    } catch (error) {
+      _showSnackBar('导出失败：$error');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _playlistFileBusy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _importPlaylist() async {
+    if (_playlistFileBusy) {
+      return;
+    }
+    final result = await FilePicker.platform.pickFiles(
+      dialogTitle: '导入播放列表',
+      type: FileType.custom,
+      allowMultiple: false,
+      withData: false,
+      allowedExtensions: const <String>['json'],
+    );
+    if (result == null || result.files.isEmpty) {
+      return;
+    }
+    final importPath = result.files.single.path;
+    if (importPath == null || importPath.isEmpty) {
+      _showSnackBar('读取文件路径失败。');
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _playlistFileBusy = true;
+    });
+    try {
+      final rawText = await File(importPath).readAsString();
+      final decoded = jsonDecode(rawText);
+      final importedItems = AppState.parsePlaylistFilePayload(decoded);
+      if (importedItems == null) {
+        _showSnackBar('导入失败：文件格式无效。');
+        return;
+      }
+      if (importedItems.isEmpty) {
+        _showSnackBar('导入失败：文件中没有可用条目。');
+        return;
+      }
+      var inaccessiblePaths = _collectInaccessiblePaths(importedItems);
+      if (inaccessiblePaths.isNotEmpty) {
+        final granted = await _requestImportFileAccess(inaccessiblePaths);
+        if (!granted) {
+          _showSnackBar('导入已取消：未完成媒体文件访问授权。');
+          return;
+        }
+        inaccessiblePaths = _collectInaccessiblePaths(importedItems);
+        if (inaccessiblePaths.isNotEmpty) {
+          _showSnackBar(
+            '导入失败：仍有 ${inaccessiblePaths.length} 个文件未授权，请在授权窗口中多选这些媒体文件。',
+          );
+          return;
+        }
+      }
+      widget.appState.replacePlayQueue(importedItems);
+      _showSnackBar('导入完成，共 ${importedItems.length} 条。');
+    } catch (error) {
+      _showSnackBar('导入失败：$error');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _playlistFileBusy = false;
+        });
+      }
+    }
+  }
+
+  Set<String> _collectInaccessiblePaths(Iterable<MediaItem> items) {
+    final paths = <String>{};
+    for (final item in items) {
+      if (!_isReadablePath(item.path)) {
+        paths.add(item.path);
+      }
+      if (item.type == MediaType.image && item.hasAudioPath) {
+        final audioPath = item.audioPath!;
+        if (!_isReadablePath(audioPath)) {
+          paths.add(audioPath);
+        }
+      }
+    }
+    return paths;
+  }
+
+  Future<bool> _requestImportFileAccess(Set<String> inaccessiblePaths) async {
+    if (!mounted || inaccessiblePaths.isEmpty) {
+      return inaccessiblePaths.isEmpty;
+    }
+    final sampleNames = inaccessiblePaths
+        .take(3)
+        .map(_fileNameFromPath)
+        .join('、');
+    final suffix = inaccessiblePaths.length > 3 ? ' 等文件' : '';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('需要系统文件权限'),
+          content: Text(
+            '导入列表引用了 ${inaccessiblePaths.length} 个未授权文件（如：$sampleNames$suffix）。\n\n点击“去授权”后，请在系统窗口中按住 Command 多选这些媒体文件。',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('去授权'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) {
+      return false;
+    }
+    final picked = await FilePicker.platform.pickFiles(
+      dialogTitle: '为导入播放列表授权媒体文件（可多选）',
+      type: FileType.custom,
+      allowMultiple: true,
+      withData: false,
+      allowedExtensions: AppState.importAccessPickerExtensions,
+    );
+    return picked != null && picked.files.isNotEmpty;
+  }
+
+  String _fileNameFromPath(String path) {
+    if (path.isEmpty) {
+      return path;
+    }
+    return path.split(Platform.pathSeparator).last;
+  }
+
+  bool _isReadablePath(String path) {
+    if (path.isEmpty) {
+      return false;
+    }
+    final file = File(path);
+    if (!file.existsSync()) {
+      return false;
+    }
+    RandomAccessFile? raf;
+    try {
+      raf = file.openSync(mode: FileMode.read);
+      raf.readSync(1);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      raf?.closeSync();
+    }
+  }
+
   Future<String?> _pickMediaPath({required String dialogTitle}) async {
     final result = await FilePicker.platform.pickFiles(
       dialogTitle: dialogTitle,
@@ -409,7 +613,9 @@ class ControlPageState extends State<ControlPage> {
                       width: 260,
                       height: 56,
                       child: FilledButton.icon(
-                        onPressed: _addingItem ? null : _addPlayableItem,
+                        onPressed: _addingItem || _playlistFileBusy
+                            ? null
+                            : _addPlayableItem,
                         icon: const Icon(Icons.add_circle_outline),
                         label: Text(_addingItem ? '校验中...' : '添加播放文件'),
                       ),
@@ -430,6 +636,24 @@ class ControlPageState extends State<ControlPage> {
                         onPressed: _openStagePage,
                         icon: const Icon(Icons.slideshow),
                         label: const Text('打开舞台页'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 260,
+                      height: 56,
+                      child: FilledButton.icon(
+                        onPressed: _playlistFileBusy ? null : _importPlaylist,
+                        icon: const Icon(Icons.upload_file),
+                        label: Text(_playlistFileBusy ? '处理中...' : '导入播放列表'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 260,
+                      height: 56,
+                      child: FilledButton.icon(
+                        onPressed: _playlistFileBusy ? null : _exportPlaylist,
+                        icon: const Icon(Icons.download),
+                        label: const Text('导出播放列表'),
                       ),
                     ),
                   ],

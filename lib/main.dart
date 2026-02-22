@@ -28,11 +28,11 @@ Future<void> main(List<String> args) async {
   }
 
   // macOS Runner config reminder:
-  // 1) Add com.apple.security.files.user-selected.read-only=true
+  // 1) Add com.apple.security.files.user-selected.read-write=true
   //    in both macos/Runner/DebugProfile.entitlements and
-  //    macos/Runner/Release.entitlements for file access.
-  // 2) For production persistence, store security-scoped bookmarks
-  //    instead of only storing plain file paths.
+  //    macos/Runner/Release.entitlements for file import/export.
+  // 2) Default background is copied into the app private directory
+  //    to survive restarts under macOS sandbox permissions.
   await windowManager.ensureInitialized();
 
   final appState = AppState();
@@ -154,6 +154,21 @@ class _HomepartyAppState extends State<HomepartyApp> {
           return _buildWindowResponse(ok: false, error: '排序失败：参数无效。');
         }
         widget.appState.reorderPlayQueue(oldIndex, newIndex);
+        return _buildWindowResponse(ok: true);
+      case PlaylistWindowMethods.replaceQueue:
+        final args = _toMap(call.arguments);
+        final rawQueue = args?[PlaylistWindowPayloadKeys.queue];
+        if (rawQueue is! List) {
+          return _buildWindowResponse(ok: false, error: '导入失败：参数无效。');
+        }
+        final queueItems = <MediaItem>[];
+        for (final rawItem in rawQueue) {
+          final item = MediaItem.fromJson(rawItem);
+          if (item != null) {
+            queueItems.add(item);
+          }
+        }
+        widget.appState.replacePlayQueue(queueItems);
         return _buildWindowResponse(ok: true);
     }
     return _buildWindowResponse(ok: false, error: '未知操作：${call.method}');

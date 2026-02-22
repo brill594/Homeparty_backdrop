@@ -212,10 +212,56 @@ class AppState extends ChangeNotifier {
     ...videoExtensions,
   ];
 
+  static const List<String> importAccessPickerExtensions = <String>[
+    ...mediaPickerExtensions,
+    ...audioExtensions,
+  ];
+
+  static const int playlistFileSchemaVersion = 1;
+
   static const String _kDefaultPath = 'default_media_path';
   static const String _kDefaultType = 'default_media_type';
   static const String _kDefaultAudioPath = 'default_media_audio_path';
   static const String _kQueueDefaultTitle = '节目';
+  static const String _kManagedMediaBaseName = 'default_media';
+  static const String _kManagedAudioBaseName = 'default_audio';
+  static const String _kManagedDefaultsFolder = 'defaults';
+
+  static Map<String, dynamic> buildPlaylistFilePayload(
+    Iterable<MediaItem> items,
+  ) {
+    return <String, dynamic>{
+      'schemaVersion': playlistFileSchemaVersion,
+      'exportedAt': DateTime.now().toIso8601String(),
+      'queue': items.map((item) => item.toJson()).toList(),
+    };
+  }
+
+  static List<MediaItem>? parsePlaylistFilePayload(dynamic raw) {
+    if (raw is List) {
+      return _parseQueueList(raw);
+    }
+    if (raw is! Map) {
+      return null;
+    }
+    final map = raw.map((key, value) => MapEntry(key.toString(), value));
+    final queueRaw = map['queue'];
+    if (queueRaw is! List) {
+      return null;
+    }
+    return _parseQueueList(queueRaw);
+  }
+
+  static List<MediaItem> _parseQueueList(List<dynamic> rawQueue) {
+    final parsed = <MediaItem>[];
+    for (final rawItem in rawQueue) {
+      final item = MediaItem.fromJson(rawItem);
+      if (item != null) {
+        parsed.add(item);
+      }
+    }
+    return parsed;
+  }
 
   SharedPreferences? _prefs;
   MediaItem? _defaultBackground;
@@ -258,7 +304,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
-    _readDefaultFromPrefs();
+    await _readDefaultFromPrefs();
     notifyListeners();
   }
 
@@ -314,17 +360,16 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> setDefaultBackground(MediaItem item) async {
-    _defaultBackground = item;
-    await _persistDefaultToPrefs(item);
+    final persistedItem = await _copyDefaultItemIntoManagedStorage(item);
+    _defaultBackground = persistedItem;
+    await _persistDefaultToPrefs(persistedItem);
     notifyListeners();
   }
 
   Future<void> clearDefaultBackground() async {
     _defaultBackground = null;
-    final prefs = await _ensurePrefs();
-    await prefs.remove(_kDefaultPath);
-    await prefs.remove(_kDefaultType);
-    await prefs.remove(_kDefaultAudioPath);
+    await _clearPersistedDefaultFromPrefs();
+    await _deleteManagedDefaultCopies();
     notifyListeners();
   }
 
@@ -393,6 +438,18 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  int replacePlayQueue(Iterable<MediaItem> items) {
+    _playQueue.clear();
+    for (final item in items) {
+      _playQueue.add(_normalizedQueueItem(item));
+    }
+    _nextPlayIndex = 0;
+    _playbackReady = false;
+    _normalizeNextIndex();
+    notifyListeners();
+    return _playQueue.length;
+  }
+
   void playOnStage(MediaItem item, {bool fromQueue = false}) {
     _stageOverride = item;
     _playSignalVersion++;
@@ -434,6 +491,13 @@ class AppState extends ChangeNotifier {
     return _prefs ??= await SharedPreferences.getInstance();
   }
 
+  Future<void> _clearPersistedDefaultFromPrefs() async {
+    final prefs = await _ensurePrefs();
+    await prefs.remove(_kDefaultPath);
+    await prefs.remove(_kDefaultType);
+    await prefs.remove(_kDefaultAudioPath);
+  }
+
   Future<void> _persistDefaultToPrefs(MediaItem item) async {
     final prefs = await _ensurePrefs();
     await prefs.setString(_kDefaultPath, item.path);
@@ -445,7 +509,7 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  void _readDefaultFromPrefs() {
+  Future<void> _readDefaultFromPrefs() async {
     final prefs = _prefs;
     if (prefs == null) {
       return;
@@ -461,15 +525,140 @@ class AppState extends ChangeNotifier {
     final mediaType = _mediaTypeFromName(typeName);
     if (mediaType == null) {
       _defaultBackground = null;
+      await _clearPersistedDefaultFromPrefs();
       return;
     }
 
     final audioPath = prefs.getString(_kDefaultAudioPath);
+    if (!_isReadableFile(path)) {
+      _defaultBackground = null;
+      await _clearPersistedDefaultFromPrefs();
+      return;
+    }
+    final resolvedAudioPath =
+        mediaType == MediaType.image &&
+            audioPath != null &&
+            audioPath.isNotEmpty &&
+            _isReadableFile(audioPath)
+        ? audioPath
+        : null;
     _defaultBackground = MediaItem(
       type: mediaType,
       path: path,
-      audioPath: mediaType == MediaType.image ? audioPath : null,
+      audioPath: mediaType == MediaType.image ? resolvedAudioPath : null,
     );
+  }
+
+  bool _isReadableFile(String path) {
+    if (path.isEmpty) {
+      return false;
+    }
+    final file = File(path);
+    if (!file.existsSync()) {
+      return false;
+    }
+    RandomAccessFile? raf;
+    try {
+      raf = file.openSync(mode: FileMode.read);
+      raf.readSync(1);
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      raf?.closeSync();
+    }
+  }
+
+  Future<MediaItem> _copyDefaultItemIntoManagedStorage(MediaItem item) async {
+    final managedPath = await _copySourceIntoManagedStorage(
+      sourcePath: item.path,
+      baseName: _kManagedMediaBaseName,
+    );
+    String? managedAudioPath;
+    if (item.type == MediaType.image && item.hasAudioPath) {
+      managedAudioPath = await _copySourceIntoManagedStorage(
+        sourcePath: item.audioPath!,
+        baseName: _kManagedAudioBaseName,
+      );
+    } else {
+      await _deleteManagedCopies(baseName: _kManagedAudioBaseName);
+    }
+    return MediaItem(
+      type: item.type,
+      path: managedPath,
+      audioPath: item.type == MediaType.image ? managedAudioPath : null,
+      title: item.title,
+      artist: item.artist,
+    );
+  }
+
+  Future<String> _copySourceIntoManagedStorage({
+    required String sourcePath,
+    required String baseName,
+  }) async {
+    final sourceFile = File(sourcePath);
+    if (!await sourceFile.exists()) {
+      throw FileSystemException('default media does not exist', sourcePath);
+    }
+    final targetDir = await _ensureManagedDefaultsDirectory();
+    final extension = _normalizedExtension(sourcePath);
+    final fileName = extension.isEmpty ? baseName : '$baseName.$extension';
+    final targetPath = '${targetDir.path}${Platform.pathSeparator}$fileName';
+
+    if (sourceFile.absolute.path == File(targetPath).absolute.path) {
+      return targetPath;
+    }
+
+    await _deleteManagedCopies(baseName: baseName, targetDirectory: targetDir);
+    await sourceFile.copy(targetPath);
+    return targetPath;
+  }
+
+  Future<Directory> _ensureManagedDefaultsDirectory() async {
+    final rootPath = _managedDataRootPath();
+    final path = '$rootPath${Platform.pathSeparator}$_kManagedDefaultsFolder';
+    final directory = Directory(path);
+    await directory.create(recursive: true);
+    return directory;
+  }
+
+  Future<void> _deleteManagedDefaultCopies() async {
+    await _deleteManagedCopies(baseName: _kManagedMediaBaseName);
+    await _deleteManagedCopies(baseName: _kManagedAudioBaseName);
+  }
+
+  Future<void> _deleteManagedCopies({
+    required String baseName,
+    Directory? targetDirectory,
+  }) async {
+    final directory =
+        targetDirectory ??
+        Directory(
+          '${_managedDataRootPath()}${Platform.pathSeparator}$_kManagedDefaultsFolder',
+        );
+    if (!await directory.exists()) {
+      return;
+    }
+    await for (final entity in directory.list(followLinks: false)) {
+      if (entity is! File) {
+        continue;
+      }
+      final name = entity.path.split(Platform.pathSeparator).last;
+      if (name == baseName || name.startsWith('$baseName.')) {
+        await entity.delete();
+      }
+    }
+  }
+
+  String _managedDataRootPath() {
+    final home = Platform.environment['HOME'];
+    if (home == null || home.isEmpty) {
+      return '${Directory.systemTemp.path}${Platform.pathSeparator}homeparty_backdrop';
+    }
+    if (Platform.isMacOS) {
+      return '$home${Platform.pathSeparator}Library${Platform.pathSeparator}Application Support${Platform.pathSeparator}homeparty_backdrop';
+    }
+    return '$home${Platform.pathSeparator}.homeparty_backdrop';
   }
 
   void _normalizeNextIndex() {

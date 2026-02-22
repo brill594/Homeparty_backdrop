@@ -4,10 +4,12 @@ class PlaylistWindowMethods {
   static const String updateItem = 'playlist.updateItem';
   static const String deleteItem = 'playlist.deleteItem';
   static const String reorder = 'playlist.reorder';
+  static const String replaceQueue = 'playlist.replaceQueue';
 }
 
 class PlaylistWindowPayloadKeys {
   static const String item = 'item';
+  static const String queue = 'queue';
   static const String index = 'index';
   static const String oldIndex = 'oldIndex';
   static const String newIndex = 'newIndex';

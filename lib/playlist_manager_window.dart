@@ -513,6 +513,7 @@ class _PlaylistManagerWindowState extends State<PlaylistManagerWindow> {
                         final item = _queue[index];
                         return _QueueItemTile(
                           key: ObjectKey(item),
+                          item: item,
                           index: index,
                           isCurrent: index == safeCurrentIndex,
                           isNext: index == safeNextIndex,
@@ -603,6 +604,7 @@ class _QueueStatusCard extends StatelessWidget {
 class _QueueItemTile extends StatelessWidget {
   const _QueueItemTile({
     super.key,
+    required this.item,
     required this.index,
     required this.isCurrent,
     required this.isNext,
@@ -610,6 +612,7 @@ class _QueueItemTile extends StatelessWidget {
     required this.onDelete,
   });
 
+  final MediaItem item;
   final int index;
   final bool isCurrent;
   final bool isNext;
@@ -633,7 +636,7 @@ class _QueueItemTile extends StatelessWidget {
           backgroundColor: Colors.white12,
           child: Text('${index + 1}', style: const TextStyle(fontSize: 12)),
         ),
-        title: Text('序号 ${index + 1}'),
+        title: Text(item.displayTitle),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
